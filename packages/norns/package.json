@@ -1,6 +1,6 @@
 {
   "name": "@human-synthesis/norns",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Norns — SvelteKit with CoffeeScript, Pug, and the .n / .c file extensions",
   "license": "MIT",
   "author": "Daniel Teodoroiu (https://humansynthesis.ai)",
@@ -30,7 +30,7 @@
     "vite": "^5.0.0 || ^6.0.0"
   },
   "dependencies": {
-    "@human-synthesis/norns-core": "^0.0.5",
+    "@human-synthesis/norns-core": "^0.0.6",
     "coffeescript": "^2.7.0"
   },
   "engines": {
