@@ -28,10 +28,13 @@
     "vite": "^5.0.0 || ^6.0.0"
   },
   "dependencies": {
-    "@human-synthesis/norns-core": "workspace:*",
+    "@human-synthesis/norns-core": "^0.0.1",
     "coffeescript": "^2.7.0"
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
