@@ -1,0 +1,37 @@
+{
+  "name": "@human-synthesis/norns",
+  "version": "0.0.1",
+  "description": "Norns — SvelteKit with CoffeeScript, Pug, and UnoCSS preconfigured",
+  "license": "MIT",
+  "author": "Human Synthesis",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/human-synthesis/norns.git"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/index.js",
+    "./config": "./src/config.js",
+    "./vite": "./src/vite.js",
+    "./preprocess": "./src/preprocess.js",
+    "./uno": "./src/uno.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0",
+    "svelte": "^5.0.0",
+    "unocss": "^0.65.0",
+    "vite": "^5.0.0 || ^6.0.0"
+  },
+  "dependencies": {
+    "@human-synthesis/norns-core": "workspace:*",
+    "coffeescript": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
