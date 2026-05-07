@@ -1,9 +1,12 @@
 import { nornsPreprocess } from '@human-synthesis/norns-core/preprocess';
 
 /**
- * Build a SvelteKit config preconfigured for Norns: Coffee/Pug preprocessing
- * and `.coffee` recognized as a SvelteKit module extension (so files like
- * `+page.coffee` and `hooks.server.coffee` work).
+ * Build a SvelteKit config preconfigured for Norns.
+ *
+ * Defaults:
+ * - `extensions: ['.svelte', '.n']`         — both vanilla and Norns components
+ * - `kit.moduleExtensions: ['.js', '.ts', '.c']` — Kit special files (`+page.c` etc.)
+ * - `preprocess: nornsPreprocess()`         — Coffee + Pug + rune fusion + auto-close
  *
  * Spread your own overrides at the call site to extend or replace defaults.
  *
@@ -11,11 +14,17 @@ import { nornsPreprocess } from '@human-synthesis/norns-core/preprocess';
  * @returns {import('@sveltejs/kit').Config}
  */
 export function nornsConfig(overrides = {}) {
-	const { kit: kitOverrides = {}, preprocess: preprocessOverride, ...rest } = overrides;
+	const {
+		kit: kitOverrides = {},
+		preprocess: preprocessOverride,
+		extensions: extensionsOverride,
+		...rest
+	} = overrides;
 	return {
+		extensions: extensionsOverride ?? ['.svelte', '.n'],
 		preprocess: preprocessOverride ?? nornsPreprocess(),
 		kit: {
-			moduleExtensions: ['.js', '.ts', '.coffee'],
+			moduleExtensions: ['.js', '.ts', '.c'],
 			...kitOverrides
 		},
 		...rest

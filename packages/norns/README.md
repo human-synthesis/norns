@@ -1,16 +1,28 @@
-# @human-synthesis/norns
+# Norns
 
-SvelteKit with CoffeeScript, Pug, and UnoCSS preconfigured.
+**AI-driven software architecture and development framework, based on Svelte.**
 
-Builds on top of [`@human-synthesis/norns-core`](https://github.com/human-synthesis/norns-core) and adds first-class support for `.coffee` SvelteKit special files (`+page.coffee`, `+page.server.coffee`, `hooks.server.coffee`, `+server.coffee`, etc.).
+SvelteKit with Pug, CoffeeScript, and `.n` / `.c` files — preconfigured.
+
+## Stack
+
+- [Svelte 5](https://svelte.dev) — components and runes
+- [SvelteKit 2](https://kit.svelte.dev) — file-system routing, SSR, endpoints
+- [Pug](https://pugjs.org) — templates
+- [CoffeeScript 2](https://coffeescript.org) — script
+- [Tailwind CSS v4](https://tailwindcss.com) — recommended styling
+- [Vite](https://vitejs.dev) — bundler
+- [bun](https://bun.sh) — runtime / package manager
 
 ## Install
 
 ```sh
-pnpm add -D @human-synthesis/norns @sveltejs/kit svelte unocss vite
+bun add -D @human-synthesis/norns @sveltejs/kit svelte
 ```
 
-## Usage
+Or use the [`norns-app`](https://github.com/human-synthesis/norns-app) starter, which has everything wired up.
+
+## Setup
 
 `svelte.config.js`:
 
@@ -18,8 +30,7 @@ pnpm add -D @human-synthesis/norns @sveltejs/kit svelte unocss vite
 import { nornsConfig } from '@human-synthesis/norns/config';
 
 export default nornsConfig({
-  // your overrides here, e.g.:
-  // kit: { adapter: adapterNode() }
+  // your overrides here
 });
 ```
 
@@ -28,42 +39,25 @@ export default nornsConfig({
 ```js
 import { defineConfig } from 'vite';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { nornsCoffeePlugin, nornsUno } from '@human-synthesis/norns';
+import { nornsCoffeePlugin } from '@human-synthesis/norns/vite';
 
 export default defineConfig({
-  plugins: [nornsCoffeePlugin(), nornsUno(), sveltekit()]
+  plugins: [nornsCoffeePlugin(), sveltekit()]
 });
 ```
 
-## What this gives you
+`package.json`:
 
-- **`.svelte` files** with `<script lang="coffee">`, `<template lang="pug">`, and UnoCSS class attributes
-- **`.coffee` Kit modules** — write `+page.coffee`, `+page.server.coffee`, `+layout.coffee`, `+server.coffee`, `hooks.server.coffee` instead of `.js`/`.ts`
-- **UnoCSS** preset stack (Uno, Attributify, Icons, Typography) wired into Vite
-
-## Example route
-
-`src/routes/+page.svelte`:
-
-```svelte
-<template lang="pug">
-  h1.text-3xl.font-bold Hello {data.name}
-  button(on:click="{() => count++}") count is {count}
-</template>
-
-<script lang="coffee">
-  export let data
-  count = 0
-</script>
+```json
+{
+  "scripts": {
+    "dev": "norns dev",
+    "build": "norns build",
+    "preview": "norns preview"
+  }
+}
 ```
 
-`src/routes/+page.server.coffee`:
+## License
 
-```coffee
-export load = ->
-  name: 'Norns'
-```
-
-## License & attribution
-
-MIT © Human Synthesis. Built on top of [SvelteKit](https://github.com/sveltejs/kit) and [Svelte](https://github.com/sveltejs/svelte) © Svelte Contributors, MIT licensed.
+MIT © Daniel Teodoroiu / [Human Synthesis](https://humansynthesis.ai). Built on top of [SvelteKit](https://github.com/sveltejs/kit) and [Svelte](https://github.com/sveltejs/svelte) © Svelte Contributors, MIT licensed.
