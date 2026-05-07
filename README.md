@@ -1,44 +1,63 @@
-[![Chat](https://img.shields.io/discord/457912077277855764?label=chat&logo=discord)](https://svelte.dev/chat)
+# Norns
 
-# SvelteKit
+**AI-driven software architecture and development framework, based on Svelte.**
 
-Web development, streamlined. Read the [documentation](https://svelte.dev/docs/kit) to get started.
+SvelteKit with Pug, CoffeeScript, and `.n` / `.c` files — preconfigured.
 
-### Packages
+## Stack
 
-| Package                                                                     | Changelog                                                     |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [@sveltejs/kit](packages/kit)                                               | [Changelog](packages/kit/CHANGELOG.md)                        |
-| [@sveltejs/adapter-auto](packages/adapter-auto)                             | [Changelog](packages/adapter-auto/CHANGELOG.md)               |
-| [@sveltejs/adapter-cloudflare](packages/adapter-cloudflare)                 | [Changelog](packages/adapter-cloudflare/CHANGELOG.md)         |
-| [@sveltejs/adapter-netlify](packages/adapter-netlify)                       | [Changelog](packages/adapter-netlify/CHANGELOG.md)            |
-| [@sveltejs/adapter-node](packages/adapter-node)                             | [Changelog](packages/adapter-node/CHANGELOG.md)               |
-| [@sveltejs/adapter-static](packages/adapter-static)                         | [Changelog](packages/adapter-static/CHANGELOG.md)             |
-| [@sveltejs/adapter-vercel](packages/adapter-vercel)                         | [Changelog](packages/adapter-vercel/CHANGELOG.md)             |
-| [@sveltejs/amp](packages/amp)                                               | [Changelog](packages/amp/CHANGELOG.md)                        |
-| [@sveltejs/enhanced-img](packages/enhanced-img)                             | [Changelog](packages/enhanced-img/CHANGELOG.md)               |
-| [@sveltejs/package](packages/package)                                       | [Changelog](packages/package/CHANGELOG.md)                    |
+- [Svelte 5](https://svelte.dev) — components and runes
+- [SvelteKit 2](https://kit.svelte.dev) — file-system routing, SSR, endpoints
+- [Pug](https://pugjs.org) — templates
+- [CoffeeScript 2](https://coffeescript.org) — script
+- [Tailwind CSS v4](https://tailwindcss.com) — recommended styling
+- [Vite](https://vitejs.dev) — bundler
+- [bun](https://bun.sh) — runtime / package manager
 
-[Additional adapters](https://sveltesociety.dev/packages?category=sveltekit-adapters) are maintained by the community.
+## Install
 
-## Bug reporting
+```sh
+bun add -D @human-synthesis/norns @sveltejs/kit svelte
+```
 
-Please make sure the issue you're reporting involves SvelteKit. Many issues related to how a project builds originate from [Vite](https://vitejs.dev/), which is used to build a SvelteKit project. You can create a new Vite project with `npm create vite@latest` for client-side only repros and `npm create vite-extra@latest` for SSR or library repros.
+Or use the [`norns-app`](https://github.com/human-synthesis/norns-app) starter, which has everything wired up.
 
-If an issue originates from Vite, please report it in the [Vite issue tracker](https://github.com/vitejs/vite/issues).
+## Setup
 
-## Contributing
+`svelte.config.js`:
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for information on how to develop SvelteKit locally.
+```js
+import { nornsConfig } from '@human-synthesis/norns/config';
 
-## Supporting Svelte
+export default nornsConfig({
+  // your overrides here
+});
+```
 
-Svelte is an MIT-licensed open source project with its ongoing development made possible entirely by fantastic volunteers. If you'd like to support their efforts, please consider:
+`vite.config.js`:
 
-- [Becoming a backer on Open Collective](https://opencollective.com/svelte).
+```js
+import { defineConfig } from 'vite';
+import { sveltekit } from '@sveltejs/kit/vite';
+import { nornsCoffeePlugin } from '@human-synthesis/norns/vite';
 
-Funds donated via Open Collective will be used for compensating expenses related to Svelte's development such as hosting costs. If sufficient donations are received, funds may also be used to support Svelte's development more directly.
+export default defineConfig({
+  plugins: [nornsCoffeePlugin(), sveltekit()]
+});
+```
+
+`package.json`:
+
+```json
+{
+  "scripts": {
+    "dev": "norns dev",
+    "build": "norns build",
+    "preview": "norns preview"
+  }
+}
+```
 
 ## License
 
-[MIT](https://github.com/sveltejs/kit/blob/main/LICENSE)
+MIT © Daniel Teodoroiu / [Human Synthesis](https://humansynthesis.ai). Built on top of [SvelteKit](https://github.com/sveltejs/kit) and [Svelte](https://github.com/sveltejs/svelte) © Svelte Contributors, MIT licensed.
