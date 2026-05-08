@@ -1,10 +1,10 @@
 import { readFile, stat, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import CoffeeScript from 'coffeescript';
+import { compile as compileCivet } from '@danielx/civet';
 
 const DEFAULT_EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'];
-const NORNS_EXTENSIONS = ['.svelte', '.n', '.c'];
+const NORNS_EXTENSIONS = ['.svelte', '.n', '.civet', '.c'];
 const RESOLVE_EXTENSIONS = [...NORNS_EXTENSIONS, '.ts', '.js'];
 const FRAMEWORK_PKGS = ['@human-synthesis/norns-core', '@human-synthesis/norns'];
 
@@ -49,16 +49,16 @@ async function resolveWorkspaceFrameworkSrcs(root) {
 
 /**
  * Vite plugin that:
- *  - compiles `.c` files (CoffeeScript) on the fly, so SvelteKit special
- *    files like `+page.c`, `+page.server.c`, `hooks.server.c`, and
- *    `+server.c` work the same as their `.js` / `.ts` counterparts;
- *  - registers `.svelte`, `.n`, and `.c` with Vite's resolver so bare
+ *  - compiles `.civet` and `.c` files via @danielx/civet, so SvelteKit
+ *    special files like `+page.civet`, `+page.server.c`, `hooks.server.civet`,
+ *    and `+server.c` work the same as their `.js` / `.ts` counterparts;
+ *  - registers `.svelte`, `.n`, `.civet`, `.c` with Vite's resolver so bare
  *    imports (`import X from './Foo'`) try those extensions in priority
  *    order, on top of Vite's defaults;
- *  - resolves bare-name imports (`import X from 'Foo'`, no `./` prefix) to
- *    a sibling file when one exists, in the same priority order. Real
- *    package imports (`'svelte/store'`, `'@scope/pkg'`) are unaffected
- *    because they contain a slash or scope marker;
+ *  - resolves bare-name imports (`import X from 'Foo'`, no `./` prefix) to a
+ *    sibling file when one exists, in the same priority order. Real package
+ *    imports (`'svelte/store'`, `'@scope/pkg'`) are unaffected because they
+ *    contain a slash or scope marker;
  *  - in workspace-linked dev (sibling repos symlinked into node_modules),
  *    excludes the framework packages from `optimizeDeps` pre-bundling and
  *    lifts them out of the default `**\/node_modules\/**` watch ignore so
@@ -67,13 +67,16 @@ async function resolveWorkspaceFrameworkSrcs(root) {
  *    process-level respawn when framework source changes — needed because
  *    Node's ESM module cache survives `server.restart()`.
  *
+ * `.c` is recognised as an alias for `.civet` — both compile through Civet.
+ * CoffeeScript is no longer supported.
+ *
  * @returns {import('vite').Plugin}
  */
-export function nornsCoffeePlugin() {
+export function nornsCivetPlugin() {
 	/** @type {string[]} */
 	let watchSrcs = [];
 	return {
-		name: 'norns:coffee',
+		name: 'norns:civet',
 		enforce: 'pre',
 		async config(_userConfig, { command }) {
 			if (command === 'serve') {
@@ -127,15 +130,14 @@ export function nornsCoffeePlugin() {
 		},
 		async load(id) {
 			const [path] = id.split('?');
-			if (!path.endsWith('.c')) return null;
+			if (!path.endsWith('.civet') && !path.endsWith('.c')) return null;
 			const source = await readFile(path, 'utf8');
-			const { js, sourceMap } = CoffeeScript.compile(source, {
-				bare: true,
+			const result = await compileCivet(source, {
+				js: true,
 				sourceMap: true,
-				inlineMap: false,
 				filename: path
 			});
-			return { code: js, map: sourceMap?.generate?.() ?? null };
+			return { code: result.code, map: result.sourceMap?.json?.(path) ?? null };
 		}
 	};
 }

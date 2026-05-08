@@ -3,6 +3,14 @@ import { spawn } from 'node:child_process';
 import { watch, realpathSync, readFileSync, lstatSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import {
+	listMigrations,
+	resolveDatabaseUrl,
+	openSqliteDb,
+	getApplied,
+	applyMigrations,
+	createMigration
+} from '../src/migrate.js';
 
 const FRAMEWORK_PKGS = ['@human-synthesis/norns-core', '@human-synthesis/norns'];
 
@@ -184,6 +192,85 @@ function passthroughCommand(name, passthrough) {
 	child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 }
 
+function migrateCommand(rest) {
+	const sub = rest[0] || 'status';
+	const cwd = process.cwd();
+	const cleaned = cleanShadowedFrameworkPkgs(cwd);
+	if (cleaned.length > 0) {
+		console.log(
+			`[norns] removed shadowed framework packages from local node_modules: ${cleaned.join(', ')}`
+		);
+	}
+	try {
+		switch (sub) {
+			case 'status':
+				return runMigrateStatus(cwd);
+			case 'up':
+				return runMigrateUp(cwd);
+			case 'create': {
+				const file = createMigration(cwd, rest[1]);
+				console.log(`Created ${file}`);
+				return;
+			}
+			default:
+				console.error(`norns migrate: unknown subcommand "${sub}"`);
+				console.error('Usage: norns migrate <status|up|create <feature>/<name>>');
+				process.exit(1);
+		}
+	} catch (err) {
+		console.error(err.message);
+		process.exit(1);
+	}
+}
+
+function runMigrateStatus(cwd) {
+	const all = listMigrations(cwd);
+	if (all.length === 0) {
+		console.log('No migrations found.');
+		return;
+	}
+	const db = openTargetDb(cwd);
+	const applied = getApplied(db);
+	console.log(`Found ${all.length} migration(s):`);
+	for (const m of all) {
+		const tag = applied.has(m.id) ? '[applied]' : '[pending]';
+		console.log(`  ${tag} ${m.id}`);
+	}
+	const pending = all.filter((m) => !applied.has(m.id)).length;
+	console.log(`\n${pending} pending, ${all.length - pending} applied.`);
+}
+
+function runMigrateUp(cwd) {
+	const all = listMigrations(cwd);
+	if (all.length === 0) {
+		console.log('No migrations found.');
+		return;
+	}
+	const db = openTargetDb(cwd);
+	const applied = getApplied(db);
+	const pending = all.filter((m) => !applied.has(m.id));
+	if (pending.length === 0) {
+		console.log('Nothing to apply — all migrations are up to date.');
+		return;
+	}
+	console.log(`Applying ${pending.length} migration(s)...`);
+	for (const m of pending) {
+		try {
+			applyMigrations(db, [m]);
+			console.log(`  [ok] ${m.id}`);
+		} catch (err) {
+			console.error(`  [fail] ${m.id}: ${err.message}`);
+			process.exit(1);
+		}
+	}
+	console.log('Done.');
+}
+
+function openTargetDb(cwd) {
+	const target = resolveDatabaseUrl(cwd);
+	return openSqliteDb(cwd, target.path);
+}
+
 const [, , cmd = 'dev', ...rest] = process.argv;
 
 switch (cmd) {
@@ -194,14 +281,23 @@ switch (cmd) {
 	case 'preview':
 		passthroughCommand(cmd, rest);
 		break;
+	case 'migrate':
+		migrateCommand(rest);
+		break;
 	case '-h':
 	case '--help':
 		console.log(`norns <command>
 
 Commands:
-  dev       start vite dev with framework-source watching (default)
-  build     run vite build
-  preview   run vite preview
+  dev                                start vite dev with framework-source watching (default)
+  build                              run vite build
+  preview                            run vite preview
+  migrate status                     list applied + pending migrations
+  migrate up                         apply pending migrations
+  migrate create <feature>/<name>    scaffold a new SQL migration
+
+Migration db is read from \$DATABASE_URL (default: file:./data/app.db).
+Only file: (better-sqlite3) is supported in v1; for D1 use \`wrangler d1 migrations apply\`.
 `);
 		break;
 	default:

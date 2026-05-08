@@ -1,7 +1,7 @@
 {
   "name": "@human-synthesis/norns",
   "version": "0.0.6",
-  "description": "Norns — SvelteKit with CoffeeScript, Pug, and the .n / .c file extensions",
+  "description": "Norns — SvelteKit with Civet, Pug, and the .n / .civet / .c file extensions",
   "license": "MIT",
   "author": "Daniel Teodoroiu (https://humansynthesis.ai)",
   "type": "module",
@@ -17,11 +17,15 @@
   "bin": {
     "norns": "./bin/norns.js"
   },
+  "scripts": {
+    "test": "bun test"
+  },
   "exports": {
     ".": "./src/index.js",
     "./config": "./src/config.js",
     "./vite": "./src/vite.js",
     "./preprocess": "./src/preprocess.js",
+    "./server": "./src/server/index.js",
     "./package.json": "./package.json"
   },
   "peerDependencies": {
@@ -30,8 +34,8 @@
     "vite": "^5.0.0 || ^6.0.0"
   },
   "dependencies": {
-    "@human-synthesis/norns-core": "^0.0.6",
-    "coffeescript": "^2.7.0"
+    "@danielx/civet": "^0.11.0",
+    "@human-synthesis/norns-core": "^0.0.6"
   },
   "engines": {
     "node": ">=18"
