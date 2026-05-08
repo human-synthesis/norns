@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { watch, realpathSync, readFileSync } from 'node:fs';
+import { watch, realpathSync, readFileSync, lstatSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -21,6 +21,66 @@ function resolveWorkspaceFrameworkSrcs(root) {
 	return out;
 }
 
+/**
+ * In workspace mode (a parent node_modules has framework packages as symlinks),
+ * a `bun add <pkg>` from the consumer dir often drops the *published* version
+ * of @human-synthesis/* into the local node_modules, which then shadows the
+ * workspace symlinks. The shadow is the npm-published code, not the local
+ * source — silently breaks dev. This detects the shadow and removes it.
+ *
+ * Only acts when both conditions hold:
+ *   1. some ancestor node_modules has the framework package as a symlink
+ *      (proves we're in workspace mode)
+ *   2. the cwd-local node_modules has the same package as a real directory
+ *      (the shadow that's overriding the symlink)
+ *
+ * No-op for normal installs (no symlinked ancestor → nothing to shadow).
+ *
+ * @param {string} cwd
+ * @returns {string[]} package names that were cleaned
+ */
+function cleanShadowedFrameworkPkgs(cwd) {
+	// Walk up from cwd looking for a parent with a framework package as symlink.
+	let workspaceMode = false;
+	let dir = dirname(cwd);
+	while (dir !== dirname(dir)) {
+		for (const pkg of FRAMEWORK_PKGS) {
+			try {
+				const stat = lstatSync(join(dir, 'node_modules', ...pkg.split('/')));
+				if (stat.isSymbolicLink()) {
+					workspaceMode = true;
+					break;
+				}
+			} catch {}
+		}
+		if (workspaceMode) break;
+		dir = dirname(dir);
+	}
+	if (!workspaceMode) return [];
+
+	const removed = [];
+	for (const pkg of FRAMEWORK_PKGS) {
+		const shadowPath = join(cwd, 'node_modules', ...pkg.split('/'));
+		try {
+			const stat = lstatSync(shadowPath);
+			// lstat doesn't follow symlinks — a symlinked dir reports
+			// isDirectory() === false, so this only matches real dirs.
+			if (stat.isDirectory()) {
+				rmSync(shadowPath, { recursive: true, force: true });
+				removed.push(pkg);
+			}
+		} catch {}
+	}
+
+	// Tidy up an emptied @human-synthesis/ scope dir if it has no other content.
+	const scopeDir = join(cwd, 'node_modules', '@human-synthesis');
+	try {
+		if (readdirSync(scopeDir).length === 0) rmSync(scopeDir, { recursive: true, force: true });
+	} catch {}
+
+	return removed;
+}
+
 function findViteBin(root) {
 	const require = createRequire(join(root, 'package.json'));
 	const pkgPath = require.resolve('vite/package.json');
@@ -32,6 +92,13 @@ function findViteBin(root) {
 
 function devCommand(passthrough) {
 	const cwd = process.cwd();
+	const cleaned = cleanShadowedFrameworkPkgs(cwd);
+	if (cleaned.length > 0) {
+		console.log(
+			`[norns] removed shadowed framework packages from local node_modules: ${cleaned.join(', ')} ` +
+				`— the workspace symlinks at the parent will be used instead.`
+		);
+	}
 	const viteBin = findViteBin(cwd);
 	const watchSrcs = resolveWorkspaceFrameworkSrcs(cwd);
 
@@ -102,6 +169,12 @@ function devCommand(passthrough) {
 
 function passthroughCommand(name, passthrough) {
 	const cwd = process.cwd();
+	const cleaned = cleanShadowedFrameworkPkgs(cwd);
+	if (cleaned.length > 0) {
+		console.log(
+			`[norns] removed shadowed framework packages from local node_modules: ${cleaned.join(', ')}`
+		);
+	}
 	const viteBin = findViteBin(cwd);
 	const child = spawn(process.execPath, [viteBin, name, ...passthrough], {
 		cwd,

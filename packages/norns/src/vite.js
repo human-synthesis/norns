@@ -110,6 +110,11 @@ export function nornsCoffeePlugin() {
 			if (source.startsWith('.') || source.startsWith('/')) return null;
 			// Scoped package or package-with-subpath — treat as a bare module.
 			if (source.startsWith('@') || source.includes('/')) return null;
+			// Skip imports from inside node_modules — library code uses proper
+			// module resolution; we'd otherwise hijack legitimate package imports
+			// (e.g. `import { parse } from 'cookie'`) when a sibling file with
+			// the same name happens to exist in the same dir.
+			if (importer.includes(`${join('/', 'node_modules', '/')}`)) return null;
 
 			// Single bare name — try resolving as a sibling file first, falling
 			// back to the default resolver (node_modules) if nothing matches.
