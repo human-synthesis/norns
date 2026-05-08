@@ -61,6 +61,39 @@ export default defineConfig({
 }
 ```
 
+## Auto-imports
+
+`nornsAutoImport()` returns an object that's both a Svelte preprocessor (for `.n` / `.svelte` files) and a Vite plugin (for standalone `.c` / `.civet` modules). Wire it in both places:
+
+```js
+// svelte.config.js
+import { nornsConfig } from '@human-synthesis/norns/config';
+import { nornsPreprocess } from '@human-synthesis/norns/preprocess';
+import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
+
+export default nornsConfig({
+  preprocess: [...nornsPreprocess(), nornsAutoImport()]
+});
+```
+
+```js
+// vite.config.js
+import { nornsCivetPlugin } from '@human-synthesis/norns/vite';
+import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
+
+export default { plugins: [nornsCivetPlugin(), nornsAutoImport(), sveltekit()] };
+```
+
+With both in place:
+
+- **Svelte helpers** — `onMount`, `tick`, `getContext`, …, plus `svelte/store` (`writable`, `readable`, `derived`, `get`).
+- **SvelteKit helpers** — `error`, `redirect`, `fail`, `json`, `text`, … from `@sveltejs/kit`. Plus `page`, `navigating`, `updated` from `$app/state` — gated to non-server paths so it doesn't collide with the Norns server `page` (different shape, same name).
+- **Norns server helpers** — `boot`, `page`, `route`, `Container`, `validate`, `betterSqlite`, … from `@human-synthesis/norns/server`. Gated to server paths (`*.server.{c,civet}`, `**/server/**`, `+server.{c,civet}`).
+- **Project components** — capitalised references like `<Card>` or `<Modal>` resolve to files under `src/lib/components/**` by default. Components inside `$lib` emit `$lib/...` import paths; components outside (e.g. route-colocated under `src/routes/**`, when you add it to `componentDirs`) emit a path relative to the importer. Files without a `<script>` block get one prepended automatically.
+- **Runes** (`$state`, `$derived`, `$effect`, `$props`) are Svelte compiler globals — no import needed; the plugin doesn't touch them.
+
+Configurable on `nornsAutoImport({ … })`: `helpers` (each entry can carry an optional `match: RegExp` to gate by filename), `componentDirs`, `componentExtensions`, `libRoot`, `libAlias`. Pass `helpers: false` or `componentDirs: false` to disable either layer.
+
 ## Runtime — feature folders + DI
 
 Wire your hooks once:

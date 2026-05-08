@@ -1,6 +1,6 @@
 {
   "name": "@human-synthesis/norns",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Norns — SvelteKit with Civet, Pug, and the .n / .civet / .c file extensions",
   "license": "MIT",
   "author": "Daniel Teodoroiu (https://humansynthesis.ai)",
@@ -22,6 +22,7 @@
   },
   "exports": {
     ".": "./src/index.js",
+    "./auto-import": "./src/auto-import.js",
     "./config": "./src/config.js",
     "./vite": "./src/vite.js",
     "./preprocess": "./src/preprocess.js",
@@ -35,7 +36,7 @@
   },
   "dependencies": {
     "@danielx/civet": "^0.11.0",
-    "@human-synthesis/norns-core": "^0.0.6"
+    "@human-synthesis/norns-core": "^0.0.7"
   },
   "engines": {
     "node": ">=18"
