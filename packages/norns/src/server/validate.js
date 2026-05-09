@@ -2,7 +2,7 @@
  * Validation glue. Norns doesn't bundle a schema library — it speaks the
  * Standard Schema interface (https://github.com/standard-schema/standard-schema)
  * supported by Valibot, Zod 3.24+, ArkType, etc. A plain function (`input -> parsed`)
- * also works, for ad-hoc cases or simple Coffee parsers.
+ * also works, for ad-hoc cases or simple hand-rolled parsers.
  */
 
 /** @typedef {{ '~standard': { validate: (input: unknown) => any } }} StandardSchema */

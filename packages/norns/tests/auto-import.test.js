@@ -327,6 +327,35 @@ describe('nornsAutoImport — project-utility scanner', () => {
 		expect(r?.code).not.toContain(`from '$lib/boot'`);
 	});
 
+	test('SvelteKit route/hook files are excluded from the export map', async () => {
+		// `load` / `actions` / `handle` are framework-consumed names — they must
+		// not enter the auto-import map or a user variable called `load` would
+		// pull a junk import from a random `+page.server.c`.
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/routes/feed'), { recursive: true });
+		mkdirSync(join(root, 'src/lib'), { recursive: true });
+		writeFileSync(
+			join(root, 'src/routes/feed/+page.server.c'),
+			`export load := => ({})\nexport actions := { create: {} }`
+		);
+		writeFileSync(join(root, 'src/hooks.server.c'), `export handle := => {}`);
+		// User-defined utility — should still be discovered
+		writeFileSync(join(root, 'src/lib/things.c'), `export thing := 1`);
+
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportDirs: ['src/lib', 'src/routes', 'src'],
+			root
+		});
+
+		const r1 = await pp.transform(`load(); actions; handle();`, join(root, 'src/something.c'));
+		expect(r1).toBe(null); // none of those should auto-import
+
+		const r2 = await pp.transform(`thing();`, join(root, 'src/something.c'));
+		expect(r2?.code).toContain(`from '$lib/things'`);
+	});
+
 	test('exportDirs disabled by default', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
 		mkdirSync(join(root, 'src/lib'), { recursive: true });

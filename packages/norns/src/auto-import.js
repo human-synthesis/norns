@@ -208,11 +208,20 @@ function extractExports(source) {
 	return out;
 }
 
+// SvelteKit route conventions (`+page.server.c`, `+layout.c`, `+server.c`,
+// `+error.svelte`, …) and hooks (`hooks.server.c`, `hooks.client.c`) export
+// names like `load`, `actions`, `GET`, `handle`, `prerender` that are
+// CONSUMED BY THE FRAMEWORK — never meant to be imported by other code. If
+// they entered the export map, a user identifier called `load` would
+// auto-import a random route's load function. Excluded by basename.
+const ROUTE_FILE_RE = /^(\+|hooks\.)/;
+
 /**
  * Walk `dirs` and build a name → absolute-file-path map of every named
  * value export found. First-match-wins on collisions (same as the component
  * scanner) — silent because warnings would noise up the dev server on
- * intentional re-exports.
+ * intentional re-exports. SvelteKit route/hook files are excluded by
+ * basename so framework-consumed exports don't leak into the map.
  *
  * @param {string} root
  * @param {string[]} dirs
@@ -225,6 +234,7 @@ function buildExportMap(root, dirs, exts) {
 	for (const d of dirs) {
 		const abs = resolve(root, d);
 		for (const file of walk(abs, exts)) {
+			if (ROUTE_FILE_RE.test(basename(file))) continue;
 			let source;
 			try {
 				source = readFileSync(file, 'utf8');

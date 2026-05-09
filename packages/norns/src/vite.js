@@ -68,7 +68,6 @@ async function resolveWorkspaceFrameworkSrcs(root) {
  *    Node's ESM module cache survives `server.restart()`.
  *
  * `.c` is recognised as an alias for `.civet` — both compile through Civet.
- * CoffeeScript is no longer supported.
  *
  * @returns {import('vite').Plugin}
  */

@@ -14,7 +14,7 @@ import { nornsPreprocess } from '@human-synthesis/norns-core/preprocess';
  *   `.ts` for hooks (it doesn't honor `moduleExtensions`), so the explicit
  *   path is the non-invasive way to make `.c`/`.civet` hooks discoverable.
  *   Same for the client and universal counterparts.
- * - `preprocess: nornsPreprocess()`         — Coffee + Pug + rune fusion + auto-close
+ * - `preprocess: nornsPreprocess()`         — Pug + Civet
  *
  * Spread your own overrides at the call site to extend or replace defaults.
  *
