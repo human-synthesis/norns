@@ -1,0 +1,39 @@
+name: norns package
+
+# Runs the @human-synthesis/norns package tests with bun, since the upstream
+# `ci.yml` only exercises the SvelteKit packages.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/norns/**'
+      - '.github/workflows/norns-package.yml'
+  pull_request:
+    paths:
+      - 'packages/norns/**'
+      - '.github/workflows/norns-package.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: packages/norns
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.16'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bun test tests/
