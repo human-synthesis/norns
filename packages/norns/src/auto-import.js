@@ -6,8 +6,18 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 // distinct client / server variants — most importantly `page`, which is
 // exported by both `$app/state` (client) and `@human-synthesis/norns/server`
 // (server) with completely different shapes.
-const SERVER_PATH_RE = /(\.server\.|\/server\/|\+server\.)/;
-const NON_SERVER_PATH_RE = /^(?!.*(?:\.server\.|\/server\/|\+server\.))/;
+//
+// The same predicate is reused (`isServerPath`) to classify project-utility
+// exports: an export from a server-path file is invisible to client importers.
+// That's the structural guarantee that prevents `db` / `bcrypt` / `repo.c`
+// internals from being silently auto-imported into `.n` components and
+// dragged into the client bundle.
+const SERVER_PATH_RE = /(\.server\.|\/server\/|\+server\.|hooks\.server\.)/;
+const NON_SERVER_PATH_RE = /^(?!.*(?:\.server\.|\/server\/|\+server\.|hooks\.server\.))/;
+
+function isServerPath(file) {
+	return SERVER_PATH_RE.test(file.replace(/\\/g, '/'));
+}
 
 const DEFAULT_HELPERS = [
 	{
@@ -216,37 +226,156 @@ function extractExports(source) {
 // auto-import a random route's load function. Excluded by basename.
 const ROUTE_FILE_RE = /^(\+|hooks\.)/;
 
-/**
- * Walk `dirs` and build a name → absolute-file-path map of every named
- * value export found. First-match-wins on collisions (same as the component
- * scanner) — silent because warnings would noise up the dev server on
- * intentional re-exports. SvelteKit route/hook files are excluded by
- * basename so framework-consumed exports don't leak into the map.
- *
- * @param {string} root
- * @param {string[]} dirs
- * @param {string[]} exts
- * @returns {Map<string, string>}
- */
-function buildExportMap(root, dirs, exts) {
-	/** @type {Map<string, string>} */
-	const map = new Map();
-	for (const d of dirs) {
-		const abs = resolve(root, d);
-		for (const file of walk(abs, exts)) {
-			if (ROUTE_FILE_RE.test(basename(file))) continue;
-			let source;
-			try {
-				source = readFileSync(file, 'utf8');
-			} catch {
-				continue;
-			}
-			for (const name of extractExports(source)) {
-				if (!map.has(name)) map.set(name, file);
+// Glob → regex. Supports `**`, `*`, `?`, and brace alternation `{a,b}`.
+// Patterns are matched against project-relative paths (POSIX-style separators).
+//
+//   src/lib/**/public.{c,civet}   → src/lib/(?:.*/)?public\.(?:c|civet)
+//   src/**/store.c                → src/(?:.*/)?store\.c
+//
+// Substitutions cascade: an early `**/` → `(?:.*/)?` expansion contains `*`,
+// which a later single-`*` rule would clobber. Every regex expansion is
+// stashed in a multi-char placeholder first; placeholders are swapped for
+// their final regex form once all glob meta has been consumed.
+function compileGlob(pattern) {
+	const PH_Q = '__NORNS_GLOB_Q__';
+	const PH_AS = '__NORNS_GLOB_AS__';
+	const PH_NS = '__NORNS_GLOB_NS__';
+
+	let p = pattern.replace(/[.+()^$|]/g, '\\$&');
+	p = p.replace(/\?/g, PH_Q);
+	p = p.replace(/\{([^}]+)\}/g, (_, inner) =>
+		'(?:' +
+		inner
+			.split(',')
+			.map((s) => s.trim().replace(/[.+()^$|?]/g, '\\$&'))
+			.join('|') +
+		')'
+	);
+	p = p.replace(/\*\*\//g, `(?:${PH_AS}/)?`);
+	p = p.replace(/\/\*\*/g, `(?:/${PH_AS})?`);
+	p = p.replace(/\*\*/g, PH_AS);
+	p = p.replace(/\*/g, PH_NS);
+	p = p.replace(new RegExp(PH_AS, 'g'), '.*');
+	p = p.replace(new RegExp(PH_NS, 'g'), '[^/]*');
+	p = p.replace(new RegExp(PH_Q, 'g'), '[^/]');
+	return new RegExp('^' + p + '$');
+}
+
+const EXPORT_WALK_SKIP = new Set([
+	'node_modules',
+	'.svelte-kit',
+	'.git',
+	'build',
+	'dist',
+	'.cache',
+	'.turbo'
+]);
+
+/** Walk `root` and return absolute paths of files matching any of `globs`. */
+function walkGlobs(root, globs) {
+	if (globs.length === 0) return [];
+	const regexes = globs.map(compileGlob);
+	/** @type {string[]} */
+	const out = [];
+	const stack = [root];
+	while (stack.length > 0) {
+		const cur = /** @type {string} */ (stack.pop());
+		let entries;
+		try {
+			entries = readdirSync(cur, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			if (entry.name.startsWith('.') && entry.name !== '.') continue;
+			if (EXPORT_WALK_SKIP.has(entry.name)) continue;
+			const full = join(cur, entry.name);
+			if (entry.isDirectory()) {
+				stack.push(full);
+			} else if (entry.isFile()) {
+				const rel = relative(root, full).replace(/\\/g, '/');
+				if (regexes.some((re) => re.test(rel))) out.push(full);
 			}
 		}
 	}
+	return out;
+}
+
+/**
+ * Walk files matching `globs` and build a name → candidate map.
+ *
+ * Each candidate carries its `isServer` classification. Resolution at
+ * import time picks the right candidate based on the importer's scope.
+ * SvelteKit route/hook files are excluded by basename so framework-consumed
+ * exports (`load`, `actions`, `handle`) don't enter the map.
+ *
+ * @param {string} root
+ * @param {string[]} globs   project-relative glob patterns
+ * @param {string[]} exts    file extensions accepted (defence-in-depth)
+ * @returns {Map<string, Array<{ file: string; isServer: boolean }>>}
+ */
+function buildExportMap(root, globs, exts) {
+	/** @type {Map<string, Array<{ file: string; isServer: boolean }>>} */
+	const map = new Map();
+	const files = walkGlobs(root, globs);
+	for (const file of files) {
+		if (ROUTE_FILE_RE.test(basename(file))) continue;
+		if (!exts.includes(extname(file))) continue;
+		let source;
+		try {
+			source = readFileSync(file, 'utf8');
+		} catch {
+			continue;
+		}
+		const rel = relative(root, file).replace(/\\/g, '/');
+		const isServer = isServerPath(rel);
+		for (const name of extractExports(source)) {
+			let list = map.get(name);
+			if (!list) {
+				list = [];
+				map.set(name, list);
+			}
+			list.push({ file, isServer });
+		}
+	}
 	return map;
+}
+
+/**
+ * Collapse a raw candidate map into one server-scope and one client-scope
+ * candidate per name. If a single scope has multiple candidates, that's a
+ * conflict — log it and exclude that scope. Mixed scopes (one server + one
+ * client) are kept and resolved dynamically by importer scope.
+ *
+ * @param {Map<string, Array<{ file: string; isServer: boolean }>>} raw
+ * @param {(msg: string) => void} [log]
+ * @returns {Map<string, { server?: string; client?: string }>}
+ */
+function resolveExportConflicts(raw, log = console.warn) {
+	/** @type {Map<string, { server?: string; client?: string }>} */
+	const out = new Map();
+	for (const [name, candidates] of raw) {
+		const servers = candidates.filter((c) => c.isServer);
+		const clients = candidates.filter((c) => !c.isServer);
+		/** @type {{ server?: string; client?: string }} */
+		const entry = {};
+		if (servers.length === 1) entry.server = servers[0].file;
+		else if (servers.length > 1) {
+			log(
+				`[norns-auto-import] conflict: \`${name}\` exported from multiple server files — not auto-imported, use explicit imports:`
+			);
+			for (const c of servers) log(`  - ${c.file}`);
+		}
+		if (clients.length === 1) entry.client = clients[0].file;
+		else if (clients.length > 1) {
+			log(
+				`[norns-auto-import] conflict: \`${name}\` exported from multiple client files — not auto-imported, use explicit imports:`
+			);
+			for (const c of clients) log(`  - ${c.file}`);
+		}
+		if (entry.server || entry.client) out.set(name, entry);
+	}
+	return out;
 }
 
 /**
@@ -347,8 +476,8 @@ function collectDeclared(script) {
  * @param {string} [filename]
  * @param {{ root?: string, libRoot?: string, libAlias?: string }} [ctx]
  * @param {Record<string, string> | null} [componentSpecs]  name → bare specifier (from user `components` map). Resolved AFTER the dir-scan map so user folders override silently.
- * @param {Map<string, string> | null} [exports]      name → absolute file path (from project-utility scan). Resolved LAST.
- * @returns {Array<{ name: string, from: string, kind: 'named' | 'default' }>}
+ * @param {Map<string, { server?: string; client?: string }> | null} [exports]   name → scoped candidate map. Resolved LAST and gated by importer scope (`isServerPath`).
+ * @returns {Array<{ name: string, from: string, kind: 'named' | 'default', annotate?: boolean }>}
  */
 function computeImports(
 	referenced,
@@ -404,16 +533,24 @@ function computeImports(
 		}
 	}
 
-	// 4. Project-utility named exports — `notes` from `$lib/notes/public`,
-	// `scheduleAiMove` from sibling `./ai`, etc. Imports emit extension-less
-	// paths (`'./store'`, `'$lib/notes/public'`) to match the convention
-	// already used in user code; Vite resolves via configured `extensions`.
+	// 4. Project-utility named exports — `notes` from `$lib/notes/public`, etc.
+	// Importer scope decides which candidate is allowed:
+	//   - Server importer  → server candidate preferred, falls back to client.
+	//   - Client importer  → ONLY a client-safe candidate; server-only exports
+	//     are invisible (prevents bundling server code into the client).
+	// Auto-injected imports get an `annotate` flag so `renderImports` can mark
+	// them with a `// auto-import` comment.
 	if (exports) {
-		for (const [name, file] of exports) {
+		const importerIsServer = isServerPath(filename);
+		for (const [name, scoped] of exports) {
 			if (!wants(name)) continue;
-			const from = resolveExportPath(file, filename, root, libRoot, libAlias);
+			const chosenFile = importerIsServer
+				? (scoped.server ?? scoped.client)
+				: scoped.client;
+			if (!chosenFile) continue;
+			const from = resolveExportPath(chosenFile, filename, root, libRoot, libAlias);
 			if (from) {
-				out.push({ name, from, kind: 'named' });
+				out.push({ name, from, kind: 'named', annotate: true });
 				added.add(name);
 			}
 		}
@@ -423,27 +560,29 @@ function computeImports(
 }
 
 /**
- * @param {Array<{ name: string, from: string, kind: 'named' | 'default' }>} entries
+ * @param {Array<{ name: string, from: string, kind: 'named' | 'default', annotate?: boolean }>} entries
  * @returns {string}
  */
 function renderImports(entries) {
-	/** @type {Map<string, { default: string | null, named: string[] }>} */
+	/** @type {Map<string, { default: string | null, named: string[], annotate: boolean }>} */
 	const byFrom = new Map();
-	for (const { name, from, kind } of entries) {
+	for (const { name, from, kind, annotate } of entries) {
 		let g = byFrom.get(from);
 		if (!g) {
-			g = { default: null, named: [] };
+			g = { default: null, named: [], annotate: false };
 			byFrom.set(from, g);
 		}
 		if (kind === 'default') g.default = name;
 		else g.named.push(name);
+		if (annotate) g.annotate = true;
 	}
 	const lines = [];
-	for (const [from, { default: def, named }] of byFrom) {
+	for (const [from, { default: def, named, annotate }] of byFrom) {
 		const parts = [];
 		if (def) parts.push(def);
 		if (named.length > 0) parts.push(`{ ${named.join(', ')} }`);
-		lines.push(`import ${parts.join(', ')} from '${from}';`);
+		const stmt = `import ${parts.join(', ')} from '${from}';`;
+		lines.push(annotate ? `${stmt} // auto-import` : stmt);
 	}
 	return lines.join('\n');
 }
@@ -500,19 +639,36 @@ function renderImports(entries) {
  *   the library's `Btn` silently (first-match-wins). The string is used as
  *   the import source verbatim — no `$lib` aliasing or relative-path
  *   computation.
+ * @param {string[] | false} [options.exportGlobs]
+ *   Glob patterns (project-relative, POSIX separators) matched against files
+ *   to scan for named-value exports. The recommended convention is barrel-file
+ *   scope — `['src/lib/**\/public.c']` exposes only each feature's intentional
+ *   API surface and leaves repo/service/module internals invisible to
+ *   auto-import. Supports `**`, `*`, `?`, and `{a,b}` alternation.
+ *
+ *   Path-based safety is enforced at resolution time: a file under
+ *   `/server/` / `*.server.*` / `+server.*` / `hooks.server.*` is classified
+ *   server-only and is NEVER auto-imported into a client (non-server) file.
+ *   Name collisions inside the same scope are detected at startup, logged,
+ *   and excluded from auto-import — forcing an explicit import to disambiguate.
+ *
+ *   Default `[]` (off; explicit imports for service-layer code).
  * @param {string[] | false} [options.exportDirs]
- *   Project-relative dirs to scan for named-value exports (think `store.c`'s
- *   `export { board, play, … }` or `public.c`'s `export notes := …`).
- *   Off by default — opt in with e.g. `['src/lib', 'src/routes']`. Files
- *   inside `libRoot` import as `$lib/...`, files outside import via paths
- *   relative to the importer. Default `false`.
+ *   DEPRECATED. Equivalent to `exportGlobs: dirs.map(d => '${d}/**\/*.{c,civet,js}')`,
+ *   which scans every file under those dirs. Path-scoping is still applied,
+ *   so server exports won't leak into client files — but the broad scan
+ *   surfaces every internal export as a potential auto-import. Migrate to
+ *   `exportGlobs: ['src/lib/**\/public.c']` for an intentional API surface.
  * @param {string[]} [options.exportExtensions]
- *   File extensions scanned for exports. Default `['.c', '.civet', '.js']`
- *   — `.ts` is excluded by default because regex-scanned `.ts` can't reliably
- *   distinguish value exports from type-only exports.
+ *   File extensions accepted for exports (defence-in-depth on top of the
+ *   glob). Default `['.c', '.civet', '.js']` — `.ts` excluded because
+ *   regex-scanned `.ts` can't reliably distinguish value vs type-only exports.
  * @param {string} [options.libRoot]   Default `'src/lib'`.
  * @param {string} [options.libAlias]  Default `'$lib'`.
  * @param {string} [options.root]      Default `process.cwd()`.
+ * @param {(msg: string) => void} [options.log]
+ *   Channel for conflict / deprecation warnings. Default `console.warn`.
+ *   Tests pass a stub to assert behavior without polluting output.
  */
 export function nornsAutoImport(options = {}) {
 	const root = options.root ?? process.cwd();
@@ -520,19 +676,37 @@ export function nornsAutoImport(options = {}) {
 	const componentDirs =
 		options.componentDirs === false ? [] : (options.componentDirs ?? DEFAULT_COMPONENT_DIRS);
 	const componentExts = options.componentExtensions ?? DEFAULT_COMPONENT_EXTS;
-	const exportDirs =
-		options.exportDirs === false || options.exportDirs == null ? [] : options.exportDirs;
 	const exportExts = options.exportExtensions ?? DEFAULT_EXPORT_EXTS;
 	const libRoot = options.libRoot ?? DEFAULT_LIB_ROOT;
 	const libAlias = options.libAlias ?? DEFAULT_LIB_ALIAS;
 	const componentSpecs = options.components ?? null;
+	const log = options.log ?? console.warn;
+
+	// Build the effective glob list. `exportGlobs` is the new API;
+	// `exportDirs` is shimmed in for backward compatibility with a one-time
+	// deprecation notice per init.
+	const explicitGlobs =
+		options.exportGlobs === false || options.exportGlobs == null ? [] : options.exportGlobs;
+	const legacyDirs =
+		options.exportDirs === false || options.exportDirs == null ? [] : options.exportDirs;
+	let effectiveGlobs = [...explicitGlobs];
+	if (legacyDirs.length > 0) {
+		log(
+			'[norns-auto-import] `exportDirs` is deprecated. Migrate to `exportGlobs`, e.g. ' +
+				"`exportGlobs: ['src/lib/**/public.c']` — barrel-file scope is the safe default."
+		);
+		effectiveGlobs = effectiveGlobs.concat(
+			legacyDirs.map((d) => `${d.replace(/\\/g, '/').replace(/\/+$/, '')}/**/*.{c,civet,js}`)
+		);
+	}
 
 	const components =
 		componentDirs.length === 0
 			? new Map()
 			: buildComponentMap(root, componentDirs, componentExts);
-	const exportsMap =
-		exportDirs.length === 0 ? null : buildExportMap(root, exportDirs, exportExts);
+	const rawExports =
+		effectiveGlobs.length === 0 ? null : buildExportMap(root, effectiveGlobs, exportExts);
+	const exportsMap = rawExports ? resolveExportConflicts(rawExports, log) : null;
 	const componentCtx = { root, libRoot, libAlias };
 
 	/** @type {Map<string, string>} */
@@ -642,7 +816,10 @@ export {
 	buildExportMap as _buildExportMap,
 	collectDeclared as _collectDeclared,
 	collectIdentifiers as _collectIdentifiers,
+	compileGlob as _compileGlob,
 	computeImports as _computeImports,
 	extractExports as _extractExports,
-	renderImports as _renderImports
+	isServerPath as _isServerPath,
+	renderImports as _renderImports,
+	resolveExportConflicts as _resolveExportConflicts
 };

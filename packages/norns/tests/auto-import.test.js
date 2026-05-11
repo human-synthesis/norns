@@ -367,6 +367,170 @@ describe('nornsAutoImport — project-utility scanner', () => {
 	});
 });
 
+describe('nornsAutoImport — exportGlobs path scoping & conflicts', () => {
+	test('server-only export is invisible to client importers', async () => {
+		// `db` exported from a /server/ path file must NOT auto-import into a
+		// client `.n` component — that's the bundle-pollution bug class.
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/lib/notes/server'), { recursive: true });
+		writeFileSync(
+			join(root, 'src/lib/notes/server/public.c'),
+			`export db := () => 'never-in-client-bundle'`
+		);
+
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportGlobs: ['src/lib/**/public.c'],
+			root,
+			log: () => {}
+		});
+		// Client importer = a .n component
+		const r = await pp.transform(
+			`const x = db()`,
+			join(root, 'src/lib/components/Thing.c')
+		);
+		expect(r).toBe(null);
+	});
+
+	test('server importer CAN consume server-scoped export', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/lib/notes/server'), { recursive: true });
+		writeFileSync(
+			join(root, 'src/lib/notes/server/public.c'),
+			`export notes := () => 'service'`
+		);
+
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportGlobs: ['src/lib/**/public.c'],
+			root,
+			log: () => {}
+		});
+		const r = await pp.transform(
+			`notes().list()`,
+			join(root, 'src/routes/feed/+page.server.c')
+		);
+		expect(r?.code).toContain(`from '$lib/notes/server/public'`);
+		// auto-import annotation present
+		expect(r?.code).toMatch(/import \{ notes \} from '\$lib\/notes\/server\/public';\s*\/\/ auto-import/);
+	});
+
+	test('mixed-scope same name: server importer gets server, client importer gets client', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/lib/notes/server'), { recursive: true });
+		mkdirSync(join(root, 'src/lib/notes/shared'), { recursive: true });
+		// Server-scoped `notes` (e.g. service factory)
+		writeFileSync(
+			join(root, 'src/lib/notes/server/public.c'),
+			`export notes := () => 'server'`
+		);
+		// Client-safe `notes` (e.g. a store re-export)
+		writeFileSync(
+			join(root, 'src/lib/notes/shared/public.c'),
+			`export notes := () => 'client'`
+		);
+
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportGlobs: ['src/lib/**/public.c'],
+			root,
+			log: () => {}
+		});
+
+		const rServer = await pp.transform(
+			`notes()`,
+			join(root, 'src/hooks.server.c')
+		);
+		expect(rServer?.code).toContain(`from '$lib/notes/server/public'`);
+
+		const rClient = await pp.transform(
+			`notes()`,
+			join(root, 'src/lib/somewhere/util.c')
+		);
+		expect(rClient?.code).toContain(`from '$lib/notes/shared/public'`);
+		expect(rClient?.code).not.toContain(`from '$lib/notes/server/public'`);
+	});
+
+	test('same-scope conflict is logged and excluded from auto-import', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/lib/a'), { recursive: true });
+		mkdirSync(join(root, 'src/lib/b'), { recursive: true });
+		writeFileSync(join(root, 'src/lib/a/public.c'), `export getById := () => 'a'`);
+		writeFileSync(join(root, 'src/lib/b/public.c'), `export getById := () => 'b'`);
+
+		/** @type {string[]} */
+		const logs = [];
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportGlobs: ['src/lib/**/public.c'],
+			root,
+			log: (m) => logs.push(m)
+		});
+
+		// Conflict warning fires at init.
+		expect(logs.some((l) => l.includes('conflict') && l.includes('getById'))).toBe(true);
+
+		// And `getById` is now invisible to auto-import — user must import explicitly.
+		const r = await pp.transform(`getById()`, join(root, 'src/lib/c/use.c'));
+		expect(r).toBe(null);
+	});
+
+	test('exportGlobs respects glob scope (only public.c, not repo.c)', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/lib/notes/server'), { recursive: true });
+		writeFileSync(
+			join(root, 'src/lib/notes/server/public.c'),
+			`export notes := () => 'public'`
+		);
+		writeFileSync(
+			join(root, 'src/lib/notes/server/repo.c'),
+			`export internalThing := () => 'internal'`
+		);
+
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportGlobs: ['src/lib/**/public.c'],
+			root,
+			log: () => {}
+		});
+
+		// `notes` is visible (matches glob)
+		const r1 = await pp.transform(`notes()`, join(root, 'src/routes/+page.server.c'));
+		expect(r1?.code).toContain(`from '$lib/notes/server/public'`);
+
+		// `internalThing` is invisible (repo.c doesn't match the glob)
+		const r2 = await pp.transform(`internalThing()`, join(root, 'src/routes/+page.server.c'));
+		expect(r2).toBe(null);
+	});
+
+	test('exportDirs is shimmed to exportGlobs and emits deprecation warning', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'src/lib'), { recursive: true });
+		writeFileSync(join(root, 'src/lib/things.c'), `export thing := 1`);
+
+		/** @type {string[]} */
+		const logs = [];
+		const pp = nornsAutoImport({
+			helpers: false,
+			componentDirs: false,
+			exportDirs: ['src/lib'],
+			root,
+			log: (m) => logs.push(m)
+		});
+
+		expect(logs.some((l) => l.includes('exportDirs') && l.includes('deprecated'))).toBe(true);
+
+		// Still works after the warning — backward compat is preserved.
+		const r = await pp.transform(`thing()`, join(root, 'src/routes/+page.server.c'));
+		expect(r?.code).toContain(`from '$lib/things'`);
+	});
+});
+
 describe('nornsAutoImport — preprocessor', () => {
 	test('injects helper imports for referenced lifecycle calls', async () => {
 		const pp = nornsAutoImport({ componentDirs: false, root: tmpdir() });

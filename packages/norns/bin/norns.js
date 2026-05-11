@@ -11,6 +11,8 @@ import {
 	applyMigrations,
 	createMigration
 } from '../src/migrate.js';
+import { nornsLint, printFindings } from '../src/lint.js';
+import { nornsDiag } from '../src/diag.js';
 
 const FRAMEWORK_PKGS = ['@human-synthesis/norns-core', '@human-synthesis/norns'];
 
@@ -271,6 +273,29 @@ function openTargetDb(cwd) {
 	return openSqliteDb(cwd, target.path);
 }
 
+function lintCommand() {
+	const findings = nornsLint(process.cwd());
+	const { errors } = printFindings(findings);
+	process.exit(errors > 0 ? 1 : 0);
+}
+
+async function diagCommand(rest) {
+	const file = rest[0];
+	if (!file) {
+		console.error('Usage: norns diag <file.c | file.civet | file.n>');
+		process.exit(1);
+	}
+	try {
+		const js = await nornsDiag(file);
+		process.stdout.write(js);
+		if (!js.endsWith('\n')) process.stdout.write('\n');
+	} catch (err) {
+		console.error(`norns diag: ${err.message}`);
+		if (err.stack) console.error(err.stack);
+		process.exit(1);
+	}
+}
+
 const [, , cmd = 'dev', ...rest] = process.argv;
 
 switch (cmd) {
@@ -284,6 +309,12 @@ switch (cmd) {
 	case 'migrate':
 		migrateCommand(rest);
 		break;
+	case 'lint':
+		lintCommand();
+		break;
+	case 'diag':
+		diagCommand(rest);
+		break;
 	case '-h':
 	case '--help':
 		console.log(`norns <command>
@@ -295,6 +326,8 @@ Commands:
   migrate status                     list applied + pending migrations
   migrate up                         apply pending migrations
   migrate create <feature>/<name>    scaffold a new SQL migration
+  lint                               scan .c/.civet/.n + vite.config for known AI pitfalls
+  diag <file>                        print the compiled JS for a .c/.civet/.n file
 
 Migration db is read from \$DATABASE_URL (default: file:./data/app.db).
 Only file: (better-sqlite3) is supported in v1; for D1 use \`wrangler d1 migrations apply\`.
