@@ -255,7 +255,7 @@ describe('nornsAutoImport — project-utility scanner', () => {
 		const pp = nornsAutoImport({
 			helpers: false,
 			componentDirs: false,
-			exportDirs: ['src/routes'],
+			exportGlobs: ['src/routes/**/*.{c,civet,js}'],
 			root
 		});
 		const r = await pp.transform(`mode; board; play; count;`, join(root, 'src/routes/tic/+page.server.c'));
@@ -278,7 +278,7 @@ describe('nornsAutoImport — project-utility scanner', () => {
 		const pp = nornsAutoImport({
 			helpers: false,
 			componentDirs: false,
-			exportDirs: ['src/lib'],
+			exportGlobs: ['src/lib/**/*.{c,civet,js}'],
 			root
 		});
 		const file = `<script>notes(container).list()\n</script>`;
@@ -300,7 +300,7 @@ describe('nornsAutoImport — project-utility scanner', () => {
 		const pp = nornsAutoImport({
 			helpers: false,
 			componentDirs: false,
-			exportDirs: ['src/lib'],
+			exportGlobs: ['src/lib/**/*.{c,civet,js}'],
 			root
 		});
 		const r = await pp.transform(
@@ -319,7 +319,7 @@ describe('nornsAutoImport — project-utility scanner', () => {
 
 		const pp = nornsAutoImport({
 			componentDirs: false,
-			exportDirs: ['src/lib'],
+			exportGlobs: ['src/lib/**/*.{c,civet,js}'],
 			root
 		});
 		const r = await pp.transform(`boot()`, join(root, 'src/hooks.server.c'));
@@ -345,7 +345,11 @@ describe('nornsAutoImport — project-utility scanner', () => {
 		const pp = nornsAutoImport({
 			helpers: false,
 			componentDirs: false,
-			exportDirs: ['src/lib', 'src/routes', 'src'],
+			exportGlobs: [
+				'src/lib/**/*.{c,civet,js}',
+				'src/routes/**/*.{c,civet,js}',
+				'src/**/*.{c,civet,js}'
+			],
 			root
 		});
 
@@ -356,7 +360,7 @@ describe('nornsAutoImport — project-utility scanner', () => {
 		expect(r2?.code).toContain(`from '$lib/things'`);
 	});
 
-	test('exportDirs disabled by default', async () => {
+	test('exportGlobs disabled by default', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
 		mkdirSync(join(root, 'src/lib'), { recursive: true });
 		writeFileSync(join(root, 'src/lib/things.c'), `export thing := 1`);
@@ -508,26 +512,23 @@ describe('nornsAutoImport — exportGlobs path scoping & conflicts', () => {
 		expect(r2).toBe(null);
 	});
 
-	test('exportDirs is shimmed to exportGlobs and emits deprecation warning', async () => {
+	test('removed exportDirs option has no effect (silently ignored)', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
 		mkdirSync(join(root, 'src/lib'), { recursive: true });
 		writeFileSync(join(root, 'src/lib/things.c'), `export thing := 1`);
 
-		/** @type {string[]} */
-		const logs = [];
 		const pp = nornsAutoImport({
 			helpers: false,
 			componentDirs: false,
+			// @ts-expect-error — option removed in 0.0.11
 			exportDirs: ['src/lib'],
 			root,
-			log: (m) => logs.push(m)
+			log: () => {}
 		});
-
-		expect(logs.some((l) => l.includes('exportDirs') && l.includes('deprecated'))).toBe(true);
-
-		// Still works after the warning — backward compat is preserved.
+		// Without exportGlobs, nothing is scanned — `exportDirs` is no longer
+		// honored. Users must migrate to `exportGlobs`.
 		const r = await pp.transform(`thing()`, join(root, 'src/routes/+page.server.c'));
-		expect(r?.code).toContain(`from '$lib/things'`);
+		expect(r).toBe(null);
 	});
 });
 

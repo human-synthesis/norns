@@ -653,12 +653,6 @@ function renderImports(entries) {
  *   and excluded from auto-import — forcing an explicit import to disambiguate.
  *
  *   Default `[]` (off; explicit imports for service-layer code).
- * @param {string[] | false} [options.exportDirs]
- *   DEPRECATED. Equivalent to `exportGlobs: dirs.map(d => '${d}/**\/*.{c,civet,js}')`,
- *   which scans every file under those dirs. Path-scoping is still applied,
- *   so server exports won't leak into client files — but the broad scan
- *   surfaces every internal export as a potential auto-import. Migrate to
- *   `exportGlobs: ['src/lib/**\/public.c']` for an intentional API surface.
  * @param {string[]} [options.exportExtensions]
  *   File extensions accepted for exports (defence-in-depth on top of the
  *   glob). Default `['.c', '.civet', '.js']` — `.ts` excluded because
@@ -667,8 +661,8 @@ function renderImports(entries) {
  * @param {string} [options.libAlias]  Default `'$lib'`.
  * @param {string} [options.root]      Default `process.cwd()`.
  * @param {(msg: string) => void} [options.log]
- *   Channel for conflict / deprecation warnings. Default `console.warn`.
- *   Tests pass a stub to assert behavior without polluting output.
+ *   Channel for conflict warnings. Default `console.warn`. Tests pass a
+ *   stub to assert behavior without polluting output.
  */
 export function nornsAutoImport(options = {}) {
 	const root = options.root ?? process.cwd();
@@ -682,23 +676,8 @@ export function nornsAutoImport(options = {}) {
 	const componentSpecs = options.components ?? null;
 	const log = options.log ?? console.warn;
 
-	// Build the effective glob list. `exportGlobs` is the new API;
-	// `exportDirs` is shimmed in for backward compatibility with a one-time
-	// deprecation notice per init.
-	const explicitGlobs =
+	const effectiveGlobs =
 		options.exportGlobs === false || options.exportGlobs == null ? [] : options.exportGlobs;
-	const legacyDirs =
-		options.exportDirs === false || options.exportDirs == null ? [] : options.exportDirs;
-	let effectiveGlobs = [...explicitGlobs];
-	if (legacyDirs.length > 0) {
-		log(
-			'[norns-auto-import] `exportDirs` is deprecated. Migrate to `exportGlobs`, e.g. ' +
-				"`exportGlobs: ['src/lib/**/public.c']` — barrel-file scope is the safe default."
-		);
-		effectiveGlobs = effectiveGlobs.concat(
-			legacyDirs.map((d) => `${d.replace(/\\/g, '/').replace(/\/+$/, '')}/**/*.{c,civet,js}`)
-		);
-	}
 
 	const components =
 		componentDirs.length === 0
