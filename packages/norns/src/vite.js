@@ -2,6 +2,7 @@ import { readFile, stat, realpath, readdir, mkdir, writeFile } from 'node:fs/pro
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { compile as compileCivet } from '@danielx/civet';
+import { extractPugClasses } from '@human-synthesis/norns-core/preprocess';
 
 const DEFAULT_EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'];
 const NORNS_EXTENSIONS = ['.svelte', '.n', '.civet', '.c'];
@@ -143,52 +144,33 @@ export function nornsCivetPlugin() {
 
 /* === pugTailwindExtract ==================================================
  *
- * Tailwind v4's content extractor tokenizes candidates against a fixed
- * non-class alphabet. Pug class-shorthand chains followed directly by an
- * attribute paren — `.grid.gap-6(class="…")` — fail that tokenizer: the
- * substring `.gap-6(` reads as one non-class token, so `gap-6` never
- * reaches the candidate set and the CSS rule is never generated.
+ * Tailwind v4's content scanner only picks up utility candidates from
+ * space-separated string contexts (`class="…"`, JS strings, etc.). It does
+ * NOT understand Pug's chained-class shorthand: `.flex.items-center.p-4`
+ * reads as one dotted token, doesn't match any utility, and gets dropped.
+ * Same for chains followed by an attribute paren — `.grid.gap-6(class="…")`.
  *
- * Because the `tag.cls.cls(attrs)` form is idiomatic Pug, asking authors
- * to either move every utility into `class="…"` or hand-maintain a
- * safelist is a paper cut on every page they touch.
+ * Net effect without help: the HTML emitted by `.n` files has the class
+ * names, but Tailwind never generates rules for them. Pages render with
+ * silently-missing layout (no error, no warning, just visually wrong).
  *
- * This plugin walks every `.n` file under `root`, extracts each `.cls`
- * segment via a permissive regex, and writes the deduplicated set into a
- * single sidecar HTML file. Consumers reference the file from their CSS
- * via `@source "./.tailwind-pug-classes.html";` so Tailwind picks it up
- * like any other content source.
+ * This plugin walks every `.n` file under `root`, extracts each shorthand
+ * class via `extractPugClasses` from `@human-synthesis/norns-core`, and
+ * writes the deduplicated set into a sidecar HTML file. Consumers
+ * reference the file from their CSS via
+ *   `@source "./.tailwind-pug-classes.html";`
+ * so Tailwind picks it up like any other content source.
  *
- * The regex is permissive on purpose — it captures every `.candidate`
- * segment in the source, including occasional false positives like
- * `.svelte` inside template text. Those are free: Tailwind's own
- * candidate-validation step drops anything that isn't a real utility, so
- * the only cost is a few extra bytes in the sidecar.
+ * Extraction skips `<script>` and `<style>` blocks, mixin calls (`+if`),
+ * text-emit lines (`|`), raw HTML lines (`<`), and Pug comments (`//`).
+ * It also pulls tokens out of any `class="…"` / `class!="…"` attribute on
+ * the same line — redundant with Tailwind's own scan in most cases, free
+ * defence in depth.
  *
  * Runs with `enforce: 'pre'` so the scan sees the raw Pug source, not the
  * Svelte output that the rest of the chain emits.
  * ========================================================================
  */
-
-/**
- * Match every `.candidate` segment. Class names may contain Tailwind's
- * full alphabet — letters, digits, `-`, `_`, `:`, `/`, and arbitrary-value
- * brackets `[...]`. Pug shorthand never contains a `.` inside a class
- * (the dot is the delimiter), so `text-[1.5rem]`-style values never appear
- * in shorthand — those always live inside `class="…"`, which Tailwind
- * extracts directly.
- */
-const SEGMENT_RE = /\.([A-Za-z][\w\-:/]*(?:\[[^\]]*\])?)/g;
-
-function extractPugClasses(source) {
-	const out = new Set();
-	let m;
-	SEGMENT_RE.lastIndex = 0;
-	while ((m = SEGMENT_RE.exec(source))) {
-		if (m[1]) out.add(m[1]);
-	}
-	return out;
-}
 
 async function walkNFiles(dir, ext, out = []) {
 	let entries;
