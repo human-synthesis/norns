@@ -10,9 +10,11 @@
  * tooling (this CLI, wrangler for D1) reads. Keeping them out of `src/lib`
  * also keeps SvelteKit's bundler from ever trying to ship them.
  *
- * v1 supports SQLite via `better-sqlite3`. Postgres/libSQL come later;
- * Cloudflare D1 is intentionally out of scope here — use
- * `wrangler d1 migrations apply <db>` for D1 deploys.
+ * v1 supports SQLite only. Backend selection is runtime-detected:
+ *   - Under Bun: built-in `bun:sqlite` (no native build, works on Alpine).
+ *   - Under Node: `better-sqlite3` (must be installed in the consumer app).
+ * Postgres/libSQL come later; Cloudflare D1 is intentionally out of scope
+ * here — use `wrangler d1 migrations apply <db>` for D1 deploys.
  */
 
 import { existsSync, readdirSync, statSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -115,11 +117,21 @@ export function resolveDatabaseUrl(cwd) {
 }
 
 /**
- * Open a better-sqlite3 db at `path` and ensure the migration tracking table
- * exists.
+ * Open a SQLite db at `path` and ensure the migration tracking table exists.
+ *
+ * Backend is runtime-selected: `bun:sqlite` under Bun (no native build,
+ * works on Alpine where `better-sqlite3`'s N-API binding fails to load
+ * against Bun's V8 compat layer), `better-sqlite3` under Node.
+ *
+ * The returned object exposes the better-sqlite3 surface used by the
+ * migration code (`pragma`, `exec`, `prepare(...).all/get/run`,
+ * `transaction`, `close`). Under Bun a minimal `pragma()` shim is grafted
+ * on — bun:sqlite has no built-in `pragma` method, but `exec('PRAGMA …')`
+ * is equivalent for the writes the migrate code performs.
  *
  * @param {string} cwd directory whose `package.json` is used to resolve
  *                     better-sqlite3 from the consumer's node_modules
+ *                     (only relevant under Node)
  * @param {string} path SQLite file path
  * @param {{ requireFrom?: string | URL }} [opts] override the require base
  *                                                (used by tests)
@@ -127,6 +139,32 @@ export function resolveDatabaseUrl(cwd) {
  */
 export function openSqliteDb(cwd, path, opts = {}) {
 	mkdirSync(dirname(path), { recursive: true });
+	const db = openRawSqlite(cwd, path, opts);
+	db.pragma('journal_mode = WAL');
+	db.exec(`CREATE TABLE IF NOT EXISTS ${MIGRATION_TABLE} (
+		id TEXT PRIMARY KEY,
+		applied_at INTEGER NOT NULL
+	)`);
+	return db;
+}
+
+/**
+ * @param {string} cwd
+ * @param {string} path
+ * @param {{ requireFrom?: string | URL }} opts
+ * @returns {any}
+ */
+function openRawSqlite(cwd, path, opts) {
+	if (typeof Bun !== 'undefined') {
+		const r = createRequire(import.meta.url);
+		const { Database } = r('bun:sqlite');
+		const db = new Database(path);
+		// bun:sqlite has no `pragma()` method. Norns calls it only with
+		// write-style statements (`'journal_mode = WAL'`, `'foreign_keys = ON'`),
+		// for which `exec('PRAGMA …')` is the documented equivalent.
+		db.pragma = (stmt) => db.exec('PRAGMA ' + stmt);
+		return db;
+	}
 	const require = createRequire(opts.requireFrom ?? join(cwd, 'package.json'));
 	let Database;
 	try {
@@ -136,13 +174,7 @@ export function openSqliteDb(cwd, path, opts = {}) {
 			'norns migrate: `better-sqlite3` is not installed in this app. Run: bun add better-sqlite3'
 		);
 	}
-	const db = new Database(path);
-	db.pragma('journal_mode = WAL');
-	db.exec(`CREATE TABLE IF NOT EXISTS ${MIGRATION_TABLE} (
-		id TEXT PRIMARY KEY,
-		applied_at INTEGER NOT NULL
-	)`);
-	return db;
+	return new Database(path);
 }
 
 /**

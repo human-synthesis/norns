@@ -92,11 +92,11 @@ describe('resolveDatabaseUrl', () => {
 	});
 });
 
-// `bun:test` segfaults when loading the better-sqlite3 native binding on this
-// platform — verified the same module loads cleanly under node. Until that's
-// resolved upstream, the SQLite-touching paths are exercised end-to-end in
-// norns-app via `norns migrate up` (see Phase 7 verification).
-describe.skip('openSqliteDb + applyMigrations + getApplied', () => {
+// Under Bun, `openSqliteDb` routes to `bun:sqlite` (built-in), which loads
+// cleanly in `bun:test`. The previous `better-sqlite3` segfault path is no
+// longer exercised here — Node-only verification still goes through
+// `norns migrate up` end-to-end in a real app.
+describe('openSqliteDb + applyMigrations + getApplied', () => {
 	test('end-to-end: status pending → applies → status applied', () => {
 		mkMigration(
 			cwd,

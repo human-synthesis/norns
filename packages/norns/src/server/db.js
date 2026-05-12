@@ -56,13 +56,31 @@ function importDynamic(mod) {
  */
 
 /**
- * Open a Drizzle instance backed by `better-sqlite3`.
+ * Open a Drizzle instance backed by SQLite.
+ *
+ * Backend is runtime-selected: `bun:sqlite` + `drizzle-orm/bun-sqlite` under
+ * Bun (built-in, no native build, works on Alpine), `better-sqlite3` +
+ * `drizzle-orm/better-sqlite3` under Node. The function name keeps the
+ * `betterSqlite` alias for backward compatibility — what actually gets
+ * loaded depends on the runtime.
  *
  * @param {string} path SQLite file path (e.g. `data/notes.db`)
  * @param {BetterSqliteOptions} [opts]
  * @returns {Promise<any>}
  */
 export async function betterSqlite(path, opts = {}) {
+	if (typeof Bun !== 'undefined') {
+		const [{ Database }, { drizzle }] = await Promise.all([
+			importDynamic('bun:sqlite'),
+			importDynamic('drizzle-orm/bun-sqlite')
+		]);
+		const sqlite = new Database(path, opts.connection);
+		if (opts.pragma) {
+			// bun:sqlite has no `pragma()` method — use `exec('PRAGMA …')`.
+			for (const p of opts.pragma) sqlite.exec('PRAGMA ' + p);
+		}
+		return drizzle(sqlite, opts.drizzle);
+	}
 	const [{ default: Database }, { drizzle }] = await Promise.all([
 		importDynamic('better-sqlite3'),
 		importDynamic('drizzle-orm/better-sqlite3')
