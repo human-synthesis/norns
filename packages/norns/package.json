@@ -1,6 +1,6 @@
 {
   "name": "@human-synthesis/norns",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Norns — SvelteKit with Civet, Pug, and the .n / .civet / .c file extensions",
   "license": "MIT",
   "author": "Daniel Teodoroiu (https://humansynthesis.ai)",

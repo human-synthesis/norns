@@ -121,7 +121,7 @@ describe('pugTailwindExtract', () => {
 		const plugin = pugTailwindExtract({
 			root: 'app',
 			ext: '.norn',
-			outFile: 'sidecar.html'
+			outFile: 'app/sidecar.html'
 		});
 		await plugin.configResolved({ root: cwd });
 		await plugin.buildStart();
@@ -129,5 +129,24 @@ describe('pugTailwindExtract', () => {
 		const out = join(cwd, 'app', 'sidecar.html');
 		expect(existsSync(out)).toBe(true);
 		expect(readFileSync(out, 'utf8')).toContain('custom-class');
+	});
+
+	test('writes the sidecar outside the scan root when outFile points elsewhere', async () => {
+		// Real-world use: scan src/, write to a hidden cache dir at project
+		// root. Keeps the generated file out of src/ where it would clutter
+		// editors and source control views.
+		writeN('src/Page.n', '.outside-cache-test');
+		const plugin = pugTailwindExtract({
+			root: 'src',
+			outFile: '.norns/tailwind-pug-classes.html'
+		});
+		await plugin.configResolved({ root: cwd });
+		await plugin.buildStart();
+
+		const out = join(cwd, '.norns', 'tailwind-pug-classes.html');
+		expect(existsSync(out)).toBe(true);
+		expect(readFileSync(out, 'utf8')).toContain('outside-cache-test');
+		// And the legacy src/ location is NOT also written.
+		expect(existsSync(join(cwd, 'src', '.tailwind-pug-classes.html'))).toBe(false);
 	});
 });
