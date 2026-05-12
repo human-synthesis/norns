@@ -37,8 +37,11 @@ describe('pugTailwindExtract', () => {
 		await plugin.configResolved({ root: cwd });
 		await plugin.buildStart();
 
-		const out = join(cwd, 'src', '.tailwind-pug-classes.html');
+		const out = join(cwd, 'node_modules', '.cache', 'norns', 'tailwind-pug-classes.html');
 		expect(existsSync(out)).toBe(true);
+		// And the legacy `src/.tailwind-pug-classes.html` location from
+		// pre-0.0.15 is NOT also created.
+		expect(existsSync(join(cwd, 'src', '.tailwind-pug-classes.html'))).toBe(false);
 
 		const html = readFileSync(out, 'utf8');
 		// Single <div class="..."> with sorted, deduped classes.
@@ -80,7 +83,7 @@ describe('pugTailwindExtract', () => {
 		await plugin.configResolved({ root: cwd });
 		await plugin.buildStart();
 
-		const html = readFileSync(join(cwd, 'src', '.tailwind-pug-classes.html'), 'utf8');
+		const html = readFileSync(join(cwd, 'node_modules', '.cache', 'norns', 'tailwind-pug-classes.html'), 'utf8');
 		expect(html).toContain('real-class');
 		expect(html).not.toContain('fake-class');
 		expect(html).not.toContain('fake-css-rule');
@@ -93,13 +96,13 @@ describe('pugTailwindExtract', () => {
 		await plugin.configResolved({ root: cwd });
 		await plugin.buildStart();
 
-		let html = readFileSync(join(cwd, 'src', '.tailwind-pug-classes.html'), 'utf8');
+		let html = readFileSync(join(cwd, 'node_modules', '.cache', 'norns', 'tailwind-pug-classes.html'), 'utf8');
 		expect(html).toContain('before');
 
 		writeFileSync(path, '.after-update');
 		await plugin.handleHotUpdate({ file: path });
 
-		html = readFileSync(join(cwd, 'src', '.tailwind-pug-classes.html'), 'utf8');
+		html = readFileSync(join(cwd, 'node_modules', '.cache', 'norns', 'tailwind-pug-classes.html'), 'utf8');
 		expect(html).toContain('after-update');
 		expect(html).not.toContain('before');
 	});
@@ -112,7 +115,7 @@ describe('pugTailwindExtract', () => {
 
 		// Should NOT throw or rebuild for non-.n changes.
 		await plugin.handleHotUpdate({ file: join(cwd, 'src', 'other.css') });
-		const html = readFileSync(join(cwd, 'src', '.tailwind-pug-classes.html'), 'utf8');
+		const html = readFileSync(join(cwd, 'node_modules', '.cache', 'norns', 'tailwind-pug-classes.html'), 'utf8');
 		expect(html).toContain('first');
 	});
 
@@ -131,22 +134,19 @@ describe('pugTailwindExtract', () => {
 		expect(readFileSync(out, 'utf8')).toContain('custom-class');
 	});
 
-	test('writes the sidecar outside the scan root when outFile points elsewhere', async () => {
-		// Real-world use: scan src/, write to a hidden cache dir at project
-		// root. Keeps the generated file out of src/ where it would clutter
-		// editors and source control views.
-		writeN('src/Page.n', '.outside-cache-test');
+	test('outFile can point anywhere (project-root-relative)', async () => {
+		writeN('src/Page.n', '.alternate-out-location');
 		const plugin = pugTailwindExtract({
 			root: 'src',
-			outFile: '.norns/tailwind-pug-classes.html'
+			outFile: '.tmp/sidecar.html'
 		});
 		await plugin.configResolved({ root: cwd });
 		await plugin.buildStart();
 
-		const out = join(cwd, '.norns', 'tailwind-pug-classes.html');
+		const out = join(cwd, '.tmp', 'sidecar.html');
 		expect(existsSync(out)).toBe(true);
-		expect(readFileSync(out, 'utf8')).toContain('outside-cache-test');
-		// And the legacy src/ location is NOT also written.
-		expect(existsSync(join(cwd, 'src', '.tailwind-pug-classes.html'))).toBe(false);
+		expect(readFileSync(out, 'utf8')).toContain('alternate-out-location');
+		// Default cache location is NOT also written when outFile is overridden.
+		expect(existsSync(join(cwd, 'node_modules', '.cache', 'norns', 'tailwind-pug-classes.html'))).toBe(false);
 	});
 });

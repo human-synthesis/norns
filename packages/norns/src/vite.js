@@ -199,22 +199,20 @@ async function walkNFiles(dir, ext, out = []) {
  * @param {string} [options.root]     Directory to scan (default `src`).
  * @param {string} [options.ext]      File extension (default `.n`).
  * @param {string} [options.outFile]  Sidecar path relative to the project
- *                                    root. The path is taken verbatim — to
- *                                    keep the sidecar out of `src/`, point
- *                                    it at a cache dir like `.norns/...`.
- *                                    Default `src/.tailwind-pug-classes.html`
- *                                    (the legacy location, kept so existing
- *                                    apps don't need migration). Reference
- *                                    it from your CSS with `@source` and
- *                                    a path relative to the importing CSS
- *                                    file.
+ *                                    root. The path is taken verbatim. Defaults
+ *                                    to `node_modules/.cache/norns/tailwind-pug-classes.html`
+ *                                    — node_modules is gitignored everywhere
+ *                                    and `.cache/` is the conventional spot
+ *                                    for build artifacts. Reference it from
+ *                                    your CSS via `@source` with a path
+ *                                    relative to the importing CSS file.
  *
  * @returns {import('vite').Plugin}
  */
 export function pugTailwindExtract({
 	root = 'src',
 	ext = '.n',
-	outFile = 'src/.tailwind-pug-classes.html'
+	outFile = 'node_modules/.cache/norns/tailwind-pug-classes.html'
 } = {}) {
 	let projectRoot = process.cwd();
 	const fileClasses = new Map(); // absolute path -> Set<string>
