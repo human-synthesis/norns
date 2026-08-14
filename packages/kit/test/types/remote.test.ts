@@ -2,6 +2,8 @@ import { query, prerender, command, form, requested } from '$app/server';
 import { StandardSchemaV1 } from '@standard-schema/spec';
 import {
 	RemoteForm,
+	RemoteFormEnhanceCallback,
+	RemoteFormEnhanceInstance,
 	RemoteFormFields,
 	RemoteFormInput,
 	RemoteLiveQueryFunction,
@@ -113,8 +115,11 @@ function live_query_tests() {
 		const result: string = await q();
 		result;
 
-		const iterator: AsyncIterator<string> = await q().run();
-		iterator;
+		for await (const value of q()) {
+			const _: string = value;
+			_;
+			break;
+		}
 
 		q().connected === true;
 		q().done === false;
@@ -350,16 +355,38 @@ function form_tests() {
 
 	f.result?.success === true;
 
-	f.enhance(async ({ submit }) => {
-		const x: boolean = await submit();
+	const submit: RemoteFormEnhanceCallback<{ input: string }, { success: boolean }> = async (
+		form
+	) => {
+		const result: { success: boolean } | undefined = form.result;
+		result;
+		// @ts-expect-error
+		form.enhance(() => {});
+		const x: boolean = await form.submit();
 		x;
-		const y: boolean = await submit().updates(
+	};
+
+	f.enhance(submit);
+
+	f.enhance(async (form) => {
+		const result: RemoteFormEnhanceInstance<{ input: string }, { success: boolean }> = form;
+		result;
+		const x: boolean = await form.submit();
+		x;
+		const y: boolean = await form.submit().updates(
 			q,
 			q(),
 			q().withOverride(() => '')
 		);
 		y;
+		const element: HTMLFormElement = form.element;
+		element;
+		// @ts-expect-error
+		form.enhance(() => {});
 	});
+
+	const element: HTMLFormElement | null = f.element;
+	element;
 
 	const f2 = form(
 		null as any as StandardSchemaV1<{ a: string; nested: { prop: string } }>,
@@ -624,6 +651,36 @@ function form_tests() {
 	f11_field2.propA;
 	// @ts-expect-error
 	f11_field2.propB;
+
+	// non-optional booleans
+	form(
+		// @ts-expect-error
+		null as unknown as StandardSchemaV1<{
+			a: boolean;
+		}>,
+		() => {}
+	);
+	form(
+		// @ts-expect-error
+		null as unknown as StandardSchemaV1<{
+			a: boolean[];
+		}>,
+		() => {}
+	);
+	form(
+		// @ts-expect-error
+		null as unknown as StandardSchemaV1<{
+			nested?: { a: boolean };
+			b?: boolean;
+		}>,
+		() => {}
+	);
+	form(
+		null as unknown as StandardSchemaV1<{
+			a?: boolean;
+		}>,
+		() => {}
+	);
 }
 form_tests();
 

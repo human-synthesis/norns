@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import {
 	BINARY_FORM_CONTENT_TYPE,
+	DELETE_KEY,
 	convert_formdata,
 	deep_set,
 	deserialize_binary_form,
@@ -50,6 +51,14 @@ describe('split_path', () => {
 });
 
 describe('convert_formdata', () => {
+	beforeAll(() => {
+		// TODO: remove after dropping support for Node 18
+		if (!('File' in globalThis)) {
+			// @ts-ignore
+			globalThis.File = buffer.File;
+		}
+	});
+
 	test('converts a FormData object', () => {
 		const data = new FormData();
 
@@ -89,6 +98,23 @@ describe('convert_formdata', () => {
 				}
 			}
 		});
+	});
+
+	test('omits empty file inputs', () => {
+		const data = new FormData();
+
+		data.append('file', new File([], ''));
+
+		expect(convert_formdata(data)).toEqual({});
+	});
+
+	test('keeps real zero-byte files', () => {
+		const data = new FormData();
+		const file = new File([], 'empty.txt');
+
+		data.append('file', file);
+
+		expect(convert_formdata(data)).toEqual({ file });
 	});
 
 	test.each(POLLUTION_ATTACKS)('prevents prototype pollution: %s', (attack) => {
@@ -221,93 +247,54 @@ describe('binary form serializer', () => {
 		expect(world_slice.type).toBe(file.type);
 	});
 
-	test('throws when Content-Length is invalid', async () => {
-		await expect(
-			deserialize_binary_form(
-				new Request('http://test', {
-					method: 'POST',
-					body: 'foo',
-					headers: {
-						'Content-Type': BINARY_FORM_CONTENT_TYPE
-					}
-				})
-			)
-		).rejects.toThrow('invalid Content-Length header');
-		await expect(
-			deserialize_binary_form(
-				new Request('http://test', {
-					method: 'POST',
-					body: 'foo',
-					headers: {
-						'Content-Type': BINARY_FORM_CONTENT_TYPE,
-						'Content-Length': 'invalid'
-					}
-				})
-			)
-		).rejects.toThrow('invalid Content-Length header');
-	});
-
-	test('data length check', async () => {
+	test('works without Content-Length header', async () => {
 		const { blob } = serialize_binary_form(
 			{
-				foo: 'bar'
+				foo: 'bar',
+				file: new File(['hello'], 'hello.txt', { type: 'text/plain' })
 			},
-			{}
+			{ validate_only: true }
 		);
-		await expect(
-			deserialize_binary_form(
-				new Request('http://test', {
-					method: 'POST',
-					body: blob,
-					headers: {
-						'Content-Type': BINARY_FORM_CONTENT_TYPE,
-						'Content-Length': (blob.size - 1).toString()
-					}
-				})
-			)
-		).rejects.toThrow('data overflow');
+		const res = await deserialize_binary_form(
+			new Request('http://test', {
+				method: 'POST',
+				body: blob,
+				headers: {
+					'Content-Type': BINARY_FORM_CONTENT_TYPE
+					// No Content-Length — simulates proxy stripping it
+				}
+			})
+		);
+		expect(res.data.foo).toBe('bar');
+		expect(res.data.file.name).toBe('hello.txt');
+		expect(res.data.file.size).toBe(5);
+		expect(await res.data.file.text()).toBe('hello');
+		expect(res.meta.validate_only).toBe(true);
 	});
 
-	test('file offset table length check', async () => {
+	test('works with Content-Length header', async () => {
 		const { blob } = serialize_binary_form(
 			{
-				file: new File([''], 'a.txt')
+				foo: 'bar',
+				file: new File(['hello'], 'hello.txt', { type: 'text/plain' })
 			},
-			{}
+			{ validate_only: true }
 		);
-		await expect(
-			deserialize_binary_form(
-				new Request('http://test', {
-					method: 'POST',
-					body: blob,
-					headers: {
-						'Content-Type': BINARY_FORM_CONTENT_TYPE,
-						'Content-Length': (blob.size - 1).toString()
-					}
-				})
-			)
-		).rejects.toThrow('file offset table overflow');
-	});
-
-	test('file length check', async () => {
-		const { blob } = serialize_binary_form(
-			{
-				file: new File(['a'], 'a.txt')
-			},
-			{}
+		const res = await deserialize_binary_form(
+			new Request('http://test', {
+				method: 'POST',
+				body: blob,
+				headers: {
+					'Content-Type': BINARY_FORM_CONTENT_TYPE,
+					'Content-Length': blob.size.toString()
+				}
+			})
 		);
-		await expect(
-			deserialize_binary_form(
-				new Request('http://test', {
-					method: 'POST',
-					body: blob,
-					headers: {
-						'Content-Type': BINARY_FORM_CONTENT_TYPE,
-						'Content-Length': (blob.size - 1).toString()
-					}
-				})
-			)
-		).rejects.toThrow('file data overflow');
+		expect(res.data.foo).toBe('bar');
+		expect(res.data.file.name).toBe('hello.txt');
+		expect(res.data.file.size).toBe(5);
+		expect(await res.data.file.text()).toBe('hello');
+		expect(res.meta.validate_only).toBe(true);
 	});
 
 	test('does not preallocate large buffers for incomplete bodies', async () => {
@@ -767,11 +754,20 @@ describe('deep_set', () => {
 	test.each(POLLUTION_ATTACKS)('avoids prototype injection', (attack) => {
 		const target = {};
 		expect(() => deep_set(target, attack.split('.'), 'bad')).toThrow(/Invalid key/);
+		expect(() => deep_set(target, attack.split('.'), DELETE_KEY)).toThrow(/Invalid key/);
 	});
 
 	test.each([null, undefined])('creates nested object when intermediate value is %s', (value) => {
 		const target = { nested: value };
 		deep_set(target, ['nested', 'name'], 'hello');
 		expect(target).toEqual({ nested: { name: 'hello' } });
+	});
+
+	test('deletes a nested value', () => {
+		const target = { nested: { file: 'hello' } };
+
+		deep_set(target, ['nested', 'file'], DELETE_KEY);
+
+		expect(target).toEqual({ nested: {} });
 	});
 });

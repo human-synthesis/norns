@@ -116,7 +116,7 @@ declare module '@sveltejs/kit' {
 		generateFallback: (dest: string) => Promise<void>;
 
 		/**
-		 * Generate a module exposing build-time environment variables as `$env/dynamic/public`.
+		 * Generate a module exposing build-time environment variables as `$env/dynamic/public` or `$app/env/public` if the app uses it.
 		 */
 		generateEnvModule: () => void;
 
@@ -377,7 +377,7 @@ declare module '@sveltejs/kit' {
 		 *
 		 * > [!NOTE] Note that most [Svelte transitions](https://svelte.dev/tutorial/svelte/transition) work by creating an inline `<style>` element. If you use these in your app, you must either leave the `style-src` directive unspecified or add `unsafe-inline`.
 		 *
-		 * If this level of configuration is insufficient and you have more dynamic requirements, you can use the [`handle` hook](https://svelte.dev/docs/kit/hooks#Server-hooks-handle) to roll your own CSP.
+		 * If this level of configuration is insufficient and you have more dynamic requirements, you can use the [`handle` hook](https://svelte.dev/docs/kit/hooks#handle) to roll your own CSP.
 		 */
 		csp?: {
 			/**
@@ -451,13 +451,20 @@ declare module '@sveltejs/kit' {
 		/** Experimental features. Here be dragons. These are not subject to semantic versioning, so breaking changes or removal can happen in any release. */
 		experimental?: {
 			/**
-			 * Options for enabling server-side [OpenTelemetry](https://opentelemetry.io/) tracing for SvelteKit operations including the [`handle` hook](https://svelte.dev/docs/kit/hooks#Server-hooks-handle), [`load` functions](https://svelte.dev/docs/kit/load), [form actions](https://svelte.dev/docs/kit/form-actions), and [remote functions](https://svelte.dev/docs/kit/remote-functions).
+			 * Whether to enable explicit environment variables using `src/env.js` or `src/env.ts`.
+			 * @since 2.63.0
+			 * @default false
+			 */
+			explicitEnvironmentVariables?: boolean;
+
+			/**
+			 * Options for enabling server-side [OpenTelemetry](https://opentelemetry.io/) tracing for SvelteKit operations including the [`handle` hook](https://svelte.dev/docs/kit/hooks#handle), [`load` functions](https://svelte.dev/docs/kit/load), [form actions](https://svelte.dev/docs/kit/form-actions), and [remote functions](https://svelte.dev/docs/kit/remote-functions).
 			 * @default { server: false, serverFile: false }
 			 * @since 2.31.0
 			 */
 			tracing?: {
 				/**
-				 * Enables server-side [OpenTelemetry](https://opentelemetry.io/) span emission for SvelteKit operations including the [`handle` hook](https://svelte.dev/docs/kit/hooks#Server-hooks-handle), [`load` functions](https://svelte.dev/docs/kit/load), [form actions](https://svelte.dev/docs/kit/form-actions), and [remote functions](https://svelte.dev/docs/kit/remote-functions).
+				 * Enables server-side [OpenTelemetry](https://opentelemetry.io/) span emission for SvelteKit operations including the [`handle` hook](https://svelte.dev/docs/kit/hooks#handle), [`load` functions](https://svelte.dev/docs/kit/load), [form actions](https://svelte.dev/docs/kit/form-actions), and [remote functions](https://svelte.dev/docs/kit/remote-functions).
 				 * @default false
 				 * @since 2.31.0
 				 */
@@ -764,6 +771,18 @@ declare module '@sveltejs/kit' {
 			 */
 			handleUnseenRoutes?: PrerenderUnseenRoutesHandlerValue;
 			/**
+			 * How to respond when SvelteKit encounters a URL it cannot parse while crawling prerendered HTML (for example, an AT Protocol URL such as `at://did:plc:...`).
+			 *
+			 * - `'fail'` — fail the build
+			 * - `'ignore'` - silently ignore the failure and continue
+			 * - `'warn'` — continue, but print a warning
+			 * - `(details) => void` — a custom error handler that takes a `details` object with `href`, `referrer` and `message` properties. If you `throw` from this function, the build will fail
+			 *
+			 * @default "fail"
+			 * @since 2.67.0
+			 */
+			handleInvalidUrl?: PrerenderInvalidUrlHandlerValue;
+			/**
 			 * The value of `url.origin` during prerendering; useful if it is included in rendered content.
 			 * @default "http://sveltekit-prerender"
 			 */
@@ -891,7 +910,7 @@ declare module '@sveltejs/kit' {
 	}
 
 	/**
-	 * The [`handle`](https://svelte.dev/docs/kit/hooks#Server-hooks-handle) hook runs every time the SvelteKit server receives a [request](https://svelte.dev/docs/kit/web-standards#Fetch-APIs-Request) and
+	 * The [`handle`](https://svelte.dev/docs/kit/hooks#handle) hook runs every time the SvelteKit server receives a [request](https://svelte.dev/docs/kit/web-standards#Fetch-APIs-Request) and
 	 * determines the [response](https://svelte.dev/docs/kit/web-standards#Fetch-APIs-Response).
 	 * It receives an `event` object representing the request and a function called `resolve`, which renders the route and generates a `Response`.
 	 * This allows you to modify response headers or bodies, or bypass SvelteKit entirely (for implementing routes programmatically, for example).
@@ -902,7 +921,7 @@ declare module '@sveltejs/kit' {
 	}) => MaybePromise<Response>;
 
 	/**
-	 * The server-side [`handleError`](https://svelte.dev/docs/kit/hooks#Shared-hooks-handleError) hook runs when an unexpected error is thrown while responding to a request.
+	 * The server-side [`handleError`](https://svelte.dev/docs/kit/hooks#handleError) hook runs when an unexpected error is thrown while responding to a request.
 	 *
 	 * If an unexpected error is thrown during loading or rendering, this function will be called with the error and the event.
 	 * Make sure that this function _never_ throws an error.
@@ -915,7 +934,7 @@ declare module '@sveltejs/kit' {
 	}) => MaybePromise<void | App.Error>;
 
 	/**
-	 * The [`handleValidationError`](https://svelte.dev/docs/kit/hooks#Server-hooks-handleValidationError) hook runs when the argument to a remote function fails validation.
+	 * The [`handleValidationError`](https://svelte.dev/docs/kit/hooks#handleValidationError) hook runs when the argument to a remote function fails validation.
 	 *
 	 * It will be called with the validation issues and the event, and must return an object shape that matches `App.Error`.
 	 */
@@ -923,7 +942,7 @@ declare module '@sveltejs/kit' {
 		(input: { issues: Issue[]; event: RequestEvent }) => MaybePromise<App.Error>;
 
 	/**
-	 * The client-side [`handleError`](https://svelte.dev/docs/kit/hooks#Shared-hooks-handleError) hook runs when an unexpected error is thrown while navigating.
+	 * The client-side [`handleError`](https://svelte.dev/docs/kit/hooks#handleError) hook runs when an unexpected error is thrown while navigating.
 	 *
 	 * If an unexpected error is thrown during loading or the following render, this function will be called with the error and the event.
 	 * Make sure that this function _never_ throws an error.
@@ -936,7 +955,7 @@ declare module '@sveltejs/kit' {
 	}) => MaybePromise<void | App.Error>;
 
 	/**
-	 * The [`handleFetch`](https://svelte.dev/docs/kit/hooks#Server-hooks-handleFetch) hook allows you to modify (or replace) the result of an [`event.fetch`](https://svelte.dev/docs/kit/load#Making-fetch-requests) call that runs on the server (or during prerendering) inside an endpoint, `load`, `action`, `handle`, `handleError` or `reroute`.
+	 * The [`handleFetch`](https://svelte.dev/docs/kit/hooks#handleFetch) hook allows you to modify (or replace) the result of an [`event.fetch`](https://svelte.dev/docs/kit/load#Making-fetch-requests) call that runs on the server (or during prerendering) inside an endpoint, `load`, `action`, `handle`, `handleError` or `reroute`.
 	 */
 	export type HandleFetch = (input: {
 		event: RequestEvent;
@@ -945,25 +964,25 @@ declare module '@sveltejs/kit' {
 	}) => MaybePromise<Response>;
 
 	/**
-	 * The [`init`](https://svelte.dev/docs/kit/hooks#Shared-hooks-init) will be invoked before the server responds to its first request
+	 * The [`init`](https://svelte.dev/docs/kit/hooks#init) will be invoked before the server responds to its first request
 	 * @since 2.10.0
 	 */
 	export type ServerInit = () => MaybePromise<void>;
 
 	/**
-	 * The [`init`](https://svelte.dev/docs/kit/hooks#Shared-hooks-init) will be invoked once the app starts in the browser
+	 * The [`init`](https://svelte.dev/docs/kit/hooks#init) will be invoked once the app starts in the browser
 	 * @since 2.10.0
 	 */
 	export type ClientInit = () => MaybePromise<void>;
 
 	/**
-	 * The [`reroute`](https://svelte.dev/docs/kit/hooks#Universal-hooks-reroute) hook allows you to modify the URL before it is used to determine which route to render.
+	 * The [`reroute`](https://svelte.dev/docs/kit/hooks#reroute) hook allows you to modify the URL before it is used to determine which route to render.
 	 * @since 2.3.0
 	 */
 	export type Reroute = (event: { url: URL; fetch: typeof fetch }) => MaybePromise<void | string>;
 
 	/**
-	 * The [`transport`](https://svelte.dev/docs/kit/hooks#Universal-hooks-transport) hook allows you to transport custom types across the server/client boundary.
+	 * The [`transport`](https://svelte.dev/docs/kit/hooks#transport) hook allows you to transport custom types across the server/client boundary.
 	 *
 	 * Each transporter has a pair of `encode` and `decode` functions. On the server, `encode` determines whether a value is an instance of the custom type and, if so, returns a non-falsy encoding of the value which can be an object or an array (or `false` otherwise).
 	 *
@@ -989,7 +1008,7 @@ declare module '@sveltejs/kit' {
 	export type Transport = Record<string, Transporter>;
 
 	/**
-	 * A member of the [`transport`](https://svelte.dev/docs/kit/hooks#Universal-hooks-transport) hook.
+	 * A member of the [`transport`](https://svelte.dev/docs/kit/hooks#transport) hook.
 	 */
 	export interface Transporter<
 		T = any,
@@ -1027,7 +1046,7 @@ declare module '@sveltejs/kit' {
 		 * - It can be used to make credentialed requests on the server, as it inherits the `cookie` and `authorization` headers for the page request.
 		 * - It can make relative requests on the server (ordinarily, `fetch` requires a URL with an origin when used in a server context).
 		 * - Internal requests (e.g. for `+server.js` routes) go directly to the handler function when running on the server, without the overhead of an HTTP call.
-		 * - During server-side rendering, the response will be captured and inlined into the rendered HTML by hooking into the `text` and `json` methods of the `Response` object. Note that headers will _not_ be serialized, unless explicitly included via [`filterSerializedResponseHeaders`](https://svelte.dev/docs/kit/hooks#Server-hooks-handle)
+		 * - During server-side rendering, the response will be captured and inlined into the rendered HTML by hooking into the `text` and `json` methods of the `Response` object. Note that headers will _not_ be serialized, unless explicitly included via [`filterSerializedResponseHeaders`](https://svelte.dev/docs/kit/hooks#handle)
 		 * - During hydration, the response will be read from the HTML, guaranteeing consistency and preventing an additional network request.
 		 *
 		 * You can learn more about making credentialed requests with cookies [here](https://svelte.dev/docs/kit/load#Cookies)
@@ -1202,14 +1221,24 @@ declare module '@sveltejs/kit' {
 	/**
 	 * - `enter`: The app has hydrated/started
 	 * - `form`: The user submitted a `<form method="GET">`
+	 * - `goto`: Navigation was triggered by a `goto(...)` call or a redirect
 	 * - `leave`: The app is being left either because the tab is being closed or a navigation to a different document is occurring
 	 * - `link`: Navigation was triggered by a link click
-	 * - `goto`: Navigation was triggered by a `goto(...)` call or a redirect
 	 * - `popstate`: Navigation was triggered by back/forward navigation
 	 */
 	export type NavigationType = 'enter' | 'form' | 'leave' | 'link' | 'goto' | 'popstate';
 
 	export interface NavigationBase {
+		/**
+		 * The type of navigation:
+		 * - `enter`: The app has hydrated/started
+		 * - `form`: The user submitted a `<form method="GET">`
+		 * - `goto`: Navigation was triggered by a `goto(...)` call or a redirect
+		 * - `leave`: The app is being left either because the tab is being closed or a navigation to a different document is occurring
+		 * - `link`: Navigation was triggered by a link click
+		 * - `popstate`: Navigation was triggered by back/forward navigation
+		 */
+		type: NavigationType;
 		/**
 		 * Where navigation was triggered from
 		 */
@@ -1229,11 +1258,10 @@ declare module '@sveltejs/kit' {
 		complete: Promise<void>;
 	}
 
+	/**
+	 * The navigation that occurs when the app starts/hydrates
+	 */
 	export interface NavigationEnter extends NavigationBase {
-		/**
-		 * The type of navigation:
-		 * - `enter`: The app has hydrated/started
-		 */
 		type: 'enter';
 
 		/**
@@ -1249,11 +1277,10 @@ declare module '@sveltejs/kit' {
 
 	export type NavigationExternal = NavigationGoto | NavigationLeave;
 
+	/**
+	 * A navigation triggered by a `goto(...)` call or a redirect
+	 */
 	export interface NavigationGoto extends NavigationBase {
-		/**
-		 * The type of navigation:
-		 * - `goto`: Navigation was triggered by a `goto(...)` call or a redirect
-		 */
 		type: 'goto';
 
 		// TODO 3.0 remove this property, so that it only exists when type is 'popstate'
@@ -1264,11 +1291,10 @@ declare module '@sveltejs/kit' {
 		delta?: undefined;
 	}
 
+	/**
+	 * A navigation triggered by the tab being closed, or the user navigating to a different document
+	 */
 	export interface NavigationLeave extends NavigationBase {
-		/**
-		 * The type of navigation:
-		 * - `leave`: The app is being left either because the tab is being closed or a navigation to a different document is occurring
-		 */
 		type: 'leave';
 
 		// TODO 3.0 remove this property, so that it only exists when type is 'popstate'
@@ -1279,11 +1305,10 @@ declare module '@sveltejs/kit' {
 		delta?: undefined;
 	}
 
+	/**
+	 * A navigation triggered by a `<form method="GET">`
+	 */
 	export interface NavigationFormSubmit extends NavigationBase {
-		/**
-		 * The type of navigation:
-		 * - `form`: The user submitted a `<form method="GET">`
-		 */
 		type: 'form';
 
 		/**
@@ -1299,11 +1324,10 @@ declare module '@sveltejs/kit' {
 		delta?: undefined;
 	}
 
+	/**
+	 * A navigation triggered by back/forward navigation
+	 */
 	export interface NavigationPopState extends NavigationBase {
-		/**
-		 * The type of navigation:
-		 * - `popstate`: Navigation was triggered by back/forward navigation
-		 */
 		type: 'popstate';
 
 		/**
@@ -1317,11 +1341,10 @@ declare module '@sveltejs/kit' {
 		event: PopStateEvent;
 	}
 
+	/**
+	 * A navigation triggered by a link click
+	 */
 	export interface NavigationLink extends NavigationBase {
-		/**
-		 * The type of navigation:
-		 * - `link`: Navigation was triggered by a link click
-		 */
 		type: 'link';
 
 		/**
@@ -1501,7 +1524,7 @@ declare module '@sveltejs/kit' {
 		 * - It can be used to make credentialed requests on the server, as it inherits the `cookie` and `authorization` headers for the page request.
 		 * - It can make relative requests on the server (ordinarily, `fetch` requires a URL with an origin when used in a server context).
 		 * - Internal requests (e.g. for `+server.js` routes) go directly to the handler function when running on the server, without the overhead of an HTTP call.
-		 * - During server-side rendering, the response will be captured and inlined into the rendered HTML by hooking into the `text` and `json` methods of the `Response` object. Note that headers will _not_ be serialized, unless explicitly included via [`filterSerializedResponseHeaders`](https://svelte.dev/docs/kit/hooks#Server-hooks-handle)
+		 * - During server-side rendering, the response will be captured and inlined into the rendered HTML by hooking into the `text` and `json` methods of the `Response` object. Note that headers will _not_ be serialized, unless explicitly included via [`filterSerializedResponseHeaders`](https://svelte.dev/docs/kit/hooks#handle)
 		 * - During hydration, the response will be read from the HTML, guaranteeing consistency and preventing an additional network request.
 		 *
 		 * You can learn more about making credentialed requests with cookies [here](https://svelte.dev/docs/kit/load#Cookies).
@@ -1512,11 +1535,15 @@ declare module '@sveltejs/kit' {
 		 */
 		getClientAddress: () => string;
 		/**
-		 * Contains custom data that was added to the request within the [`server handle hook`](https://svelte.dev/docs/kit/hooks#Server-hooks-handle).
+		 * Contains custom data that was added to the request within the [`server handle hook`](https://svelte.dev/docs/kit/hooks#handle).
 		 */
 		locals: App.Locals;
 		/**
 		 * The parameters of the current route - e.g. for a route like `/blog/[slug]`, a `{ slug: string }` object.
+		 *
+		 * In the context of a remote function request initiated by the client, this relates to the page the remote function
+		 * was called from, _not_ the URL of the endpoint SvelteKit creates for the remote function. Never use this to determine
+		 * whether or not a user is authorized to access certain data, as these values are part of the request which could be manipulated.
 		 */
 		params: Params;
 		/**
@@ -1533,6 +1560,10 @@ declare module '@sveltejs/kit' {
 		route: {
 			/**
 			 * The ID of the current route - e.g. for `src/routes/blog/[slug]`, it would be `/blog/[slug]`. It is `null` when no route is matched.
+			 *
+			 * In the context of a remote function request initiated by the client, this relates to the page the remote function
+			 * was called from, _not_ the URL of the endpoint SvelteKit creates for the remote function. Never use this to determine
+			 * whether or not a user is authorized to access certain data, as these values are part of the request which could be manipulated.
 			 */
 			id: RouteId;
 		};
@@ -1561,6 +1592,10 @@ declare module '@sveltejs/kit' {
 		setHeaders: (headers: Record<string, string>) => void;
 		/**
 		 * The requested URL.
+		 *
+		 * In the context of a remote function request initiated by the client, this relates to the page the remote function
+		 * was called from, _not_ the URL of the endpoint SvelteKit creates for the remote function. Never use this to determine
+		 * whether or not a user is authorized to access certain data, as these values are part of the request which could be manipulated.
 		 */
 		url: URL;
 		/**
@@ -1663,7 +1698,7 @@ declare module '@sveltejs/kit' {
 
 		/** private fields */
 		_: {
-			client: NonNullable<BuildData['client']>;
+			client: BuildData['client'];
 			nodes: SSRNodeLoader[];
 			/** hashed filename -> import to that file */
 			remotes: Record<string, () => Promise<any>>;
@@ -1879,8 +1914,8 @@ declare module '@sveltejs/kit' {
 		checkbox: boolean | string[];
 		radio: string;
 		file: File;
-		hidden: string;
-		submit: string;
+		hidden: string | number | boolean;
+		submit: string | number | boolean;
 		button: string;
 		reset: string;
 		image: string;
@@ -1971,11 +2006,15 @@ declare module '@sveltejs/kit' {
 			: Value extends boolean
 				? [type: Type] | [type: Type, value: boolean]
 				: [type: Type] | [type: Type, value: Value | (string & {})]
-		: Type extends 'radio' | 'submit' | 'hidden'
-			? [type: Type, value: Value | (string & {})]
-			: Type extends 'file' | 'file multiple'
-				? [type: Type]
-				: [type: Type] | [type: Type, value: Value | (string & {})];
+		: Type extends 'submit' | 'hidden'
+			? Value extends string
+				? [type: Type, value: Value | (string & {})]
+				: [type: Type, value: Value]
+			: Type extends 'radio'
+				? [type: Type, value: Value | (string & {})]
+				: Type extends 'file' | 'file multiple'
+					? [type: Type]
+					: [type: Type] | [type: Type, value: Value | (string & {})];
 
 	/**
 	 * Form field accessor type that provides name(), value(), and issues() methods
@@ -2060,7 +2099,7 @@ declare module '@sveltejs/kit' {
 	type MaybeArray<T> = T | T[];
 
 	export interface RemoteFormInput {
-		[key: string]: MaybeArray<string | number | boolean | File | RemoteFormInput>;
+		[key: string]: MaybeArray<string | number | boolean | File | RemoteFormInput> | undefined;
 	}
 
 	export interface RemoteFormIssue {
@@ -2107,6 +2146,24 @@ declare module '@sveltejs/kit' {
 	}
 
 	/**
+	 * The form instance as received inside an `enhance` callback. See [Remote functions](https://svelte.dev/docs/kit/remote-functions#form) for full documentation.
+	 */
+	export type RemoteFormEnhanceInstance<
+		Input extends RemoteFormInput | void = RemoteFormInput | void,
+		Output = any
+	> = Omit<RemoteForm<Input, Output>, 'enhance' | 'element'> & {
+		readonly element: HTMLFormElement;
+	};
+
+	/**
+	 * The callback passed to a remote form's `enhance` method. See [Remote functions](https://svelte.dev/docs/kit/remote-functions#form) for full documentation.
+	 */
+	export type RemoteFormEnhanceCallback<
+		Input extends RemoteFormInput | void = RemoteFormInput | void,
+		Output = any
+	> = (form: RemoteFormEnhanceInstance<Input, Output>) => MaybePromise<void>;
+
+	/**
 	 * The type of a remote `form` function. See [Remote functions](https://svelte.dev/docs/kit/remote-functions#form) for full documentation.
 	 */
 	export type RemoteForm<Input extends RemoteFormInput | void, Output> = {
@@ -2115,16 +2172,14 @@ declare module '@sveltejs/kit' {
 		method: 'POST';
 		/** The URL to send the form to. */
 		action: string;
+		/** The `<form>` element this instance is currently attached to, if any. */
+		get element(): HTMLFormElement | null;
+		/** Submit the currently attached form programmatically. */
+		submit(): Promise<boolean> & {
+			updates: (...updates: RemoteQueryUpdate[]) => Promise<boolean>;
+		};
 		/** Use the `enhance` method to influence what happens when the form is submitted. */
-		enhance(
-			callback: (opts: {
-				form: HTMLFormElement;
-				data: Input;
-				submit: () => Promise<boolean> & {
-					updates: (...updates: RemoteQueryUpdate[]) => Promise<boolean>;
-				};
-			}) => MaybePromise<void>
-		): {
+		enhance(callback: RemoteFormEnhanceCallback<Input, Output>): {
 			method: 'POST';
 			action: string;
 			[attachment: symbol]: (node: HTMLFormElement) => void;
@@ -2157,6 +2212,8 @@ declare module '@sveltejs/kit' {
 		get result(): Output | undefined;
 		/** The number of pending submissions */
 		get pending(): number;
+		/** True if the form has been submitted at least once */
+		get submitted(): boolean;
 		/** Access form fields using object notation */
 		fields: RemoteFormFieldsRoot<Input>;
 	};
@@ -2199,12 +2256,6 @@ declare module '@sveltejs/kit' {
 
 	export type RemoteQuery<T> = RemoteResource<T> & {
 		/**
-		 * Returns a plain promise with the result.
-		 * Unlike awaiting the resource directly, this can only be used _outside_ render
-		 * (i.e. in load functions, event handlers and so on)
-		 */
-		run(): Promise<T>;
-		/**
 		 * On the client, this function will update the value of the query without re-fetching it.
 		 *
 		 * On the server, this can be called in the context of a `command` or `form` and the specified data will accompany the action response back to the client.
@@ -2227,9 +2278,9 @@ declare module '@sveltejs/kit' {
 		 *   const todos = getTodos();
 		 * </script>
 		 *
-		 * <form {...addTodo.enhance(async ({ data, submit }) => {
-		 *   await submit().updates(
-		 *     todos.withOverride((todos) => [...todos, { text: data.get('text') }])
+		 * <form {...addTodo.enhance(async (form) => {
+		 *   await form.submit().updates(
+		 *     todos.withOverride((todos) => [...todos, { text: form.fields.text.value() }])
 		 *   );
 		 * })}>
 		 *   <input type="text" name="text" />
@@ -2240,20 +2291,15 @@ declare module '@sveltejs/kit' {
 		withOverride(update: (current: T) => T): RemoteQueryOverride;
 	};
 
-	export type RemoteLiveQuery<T> = RemoteResource<T> & {
-		/**
-		 * Returns an async iterator with live updates.
-		 * Unlike awaiting the resource directly, this can only be used _outside_ render
-		 * (i.e. in load functions, event handlers and so on)
-		 */
-		run(): AsyncGenerator<T>;
-		/** `true` if the live stream is currently connected. */
-		readonly connected: boolean;
-		/** `true` once the current live stream iterator is done. */
-		readonly done: boolean;
-		/** Reconnects the live stream immediately. */
-		reconnect(): Promise<void>;
-	};
+	export type RemoteLiveQuery<T> = RemoteResource<T> &
+		AsyncIterable<T> & {
+			/** `true` if the live stream is currently connected. */
+			readonly connected: boolean;
+			/** `true` once the current live stream iterator is done. */
+			readonly done: boolean;
+			/** Reconnects the live stream immediately. */
+			reconnect(): Promise<void>;
+		};
 
 	export type RemoteQueryOverride = () => void;
 
@@ -2290,6 +2336,39 @@ declare module '@sveltejs/kit' {
 	export type RemoteLiveQueryFunction<Input, Output, _Validated = Input> = (
 		arg: undefined extends Input ? Input | void : Input
 	) => RemoteLiveQuery<Output>;
+
+	/**
+	 * [Environment variables](https://svelte.dev/docs/kit/environment-variables) can be configured by exporting
+	 * a `variables` object from `src/env.ts`, using [`defineEnvVars`](https://svelte.dev/docs/kit/@sveltejs-kit-env#defineEnvVars).
+	 */
+	export interface EnvVarConfig<T> {
+		/**
+		 * Whether the environment variable can be accessed by client-side code.
+		 * - if `true`, it can be imported from `$app/env/public`
+		 * - if `false`, it can be imported from `$app/env/private`, which is a [server-only module](https://svelte.dev/docs/kit/server-only-modules)
+		 * @default false
+		 */
+		public?: boolean;
+		/**
+		 * Whether the value is determined at build time or when the app runs.
+		 * - if `true`, the build time value is inlined into the bundle. This enables optimisations like dead-code elimination
+		 * - if `false`, the value is read from the environment when the app starts
+		 * @default false
+		 */
+		static?: boolean;
+		/**
+		 * A [Standard Schema](https://standardschema.dev/) validator that is applied to the value when the app starts.
+		 * The validator can output any value — not necessarily a string — but public, non-static values must be
+		 * serializable by [devalue](https://github.com/sveltejs/devalue) so that they can be sent to the browser.
+		 *
+		 * If omitted, the value must be a non-empty string.
+		 */
+		schema?: StandardSchemaV1<string | undefined, T>;
+		/**
+		 * A description of the variable that will be used for inline documentation on hover.
+		 */
+		description?: string;
+	}
 	interface AdapterEntry {
 		/**
 		 * A string that uniquely identifies an HTTP service (e.g. serverless function) and is used for deduplication.
@@ -2347,7 +2426,10 @@ declare module '@sveltejs/kit' {
 			| 'unsafe-eval'
 			| 'unsafe-hashes'
 			| 'unsafe-inline'
+			| 'unsafe-allow-redirects'
+			| 'unsafe-webtransport-hashes'
 			| 'wasm-unsafe-eval'
+			| 'trusted-types-eval'
 			| 'none';
 		type CryptoSource = `${'nonce' | 'sha256' | 'sha384' | 'sha512'}-${string}`;
 		type FrameSource = HostSource | SchemeSource | 'self' | 'none';
@@ -2356,7 +2438,16 @@ declare module '@sveltejs/kit' {
 		type HostProtocolSchemes = `${string}://` | '';
 		type HttpDelineator = '/' | '?' | '#' | '\\';
 		type PortScheme = `:${number}` | '' | ':*';
-		type SchemeSource = 'http:' | 'https:' | 'data:' | 'mediastream:' | 'blob:' | 'filesystem:';
+		type SchemeSource =
+			| 'http:'
+			| 'https:'
+			| 'ws:'
+			| 'wss:'
+			| 'data:'
+			| 'mediastream:'
+			| 'blob:'
+			| 'filesystem:'
+			| (`${string}:` & {});
 		type Source = HostSource | SchemeSource | CryptoSource | BaseSource;
 		type Sources = Source[];
 	}
@@ -2498,6 +2589,10 @@ declare module '@sveltejs/kit' {
 		(details: { routes: string[]; message: string }): void;
 	}
 
+	interface PrerenderInvalidUrlHandler {
+		(details: { href: string; referrer: string | null; message: string }): void;
+	}
+
 	type PrerenderHttpErrorHandlerValue = 'fail' | 'warn' | 'ignore' | PrerenderHttpErrorHandler;
 	type PrerenderMissingIdHandlerValue = 'fail' | 'warn' | 'ignore' | PrerenderMissingIdHandler;
 	type PrerenderUnseenRoutesHandlerValue =
@@ -2510,6 +2605,11 @@ declare module '@sveltejs/kit' {
 		| 'warn'
 		| 'ignore'
 		| PrerenderEntryGeneratorMismatchHandler;
+	type PrerenderInvalidUrlHandlerValue =
+		| 'fail'
+		| 'warn'
+		| 'ignore'
+		| PrerenderInvalidUrlHandler;
 
 	export type PrerenderOption = boolean | 'auto';
 
@@ -2575,6 +2675,9 @@ declare module '@sveltejs/kit' {
 			routes?: SSRClientRoute[];
 			stylesheets: string[];
 			fonts: string[];
+			/**
+			 * Whether the client uses public dynamic env vars — `$env/dynamic/public` or `$app/env/public`.
+			 */
 			uses_env_dynamic_public: boolean;
 			/** Only set in case of `bundleStrategy === 'inline'`. */
 			inline?: {
@@ -2718,7 +2821,10 @@ declare module '@sveltejs/kit' {
 		universal_id?: string;
 		server_id?: string;
 
-		/** inlined styles */
+		/**
+		 * During development, all styles are inlined for the page to avoid FOUC.
+		 * But in production, this stores styles that are below the inline threshold
+		 */
 		inline_styles?(): MaybePromise<
 			Record<string, string | ((assets: string, base: string) => string)>
 		>;
@@ -2908,8 +3014,16 @@ declare module '@sveltejs/kit' {
 	export type LessThan<TNumber extends number, TArray extends any[] = []> = TNumber extends TArray["length"] ? TArray[number] : LessThan<TNumber, [...TArray, TArray["length"]]>;
 	export type NumericRange<TStart extends number, TEnd extends number> = Exclude<TEnd | LessThan<TEnd>, LessThan<TStart>>;
 	type ValidPageOption = (typeof valid_page_options_array)[number];
-	type PageOptions = Partial<Record<ValidPageOption, any>>;
-	const valid_page_options_array: readonly ["ssr", "prerender", "csr", "trailingSlash", "config", "entries", "load"];
+
+	type PageOptions = Partial<{
+		[K in ValidPageOption]: K extends 'ssr' | 'csr'
+			? boolean
+			: K extends 'prerender'
+				? PrerenderOption
+				: K extends 'trailingSlash'
+					? TrailingSlash
+					: any;
+	}>;
 	export const VERSION: string;
 	class HttpError_1 {
 		
@@ -2926,12 +3040,29 @@ declare module '@sveltejs/kit' {
 		status: 300 | 301 | 302 | 303 | 304 | 305 | 306 | 307 | 308;
 		location: string;
 	}
+	const valid_page_options_array: readonly ["ssr", "prerender", "csr", "trailingSlash", "config", "entries", "load"];
+
+	export {};
+}
+
+declare module '@sveltejs/kit/env' {
+	/**
+	 * Utility for defining [environment variables](https://svelte.dev/docs/kit/environment-variables),
+	 * which are made available via `$app/env/public` and `$app/env/private`.
+	 * */
+	export function defineEnvVars<T extends Record<string, import("@sveltejs/kit").EnvVarConfig<any>>>(variables: T): T;
 
 	export {};
 }
 
 declare module '@sveltejs/kit/hooks' {
-	import type { Handle } from '@sveltejs/kit';
+	import type { EnvVarConfig, Handle } from '@sveltejs/kit';
+	/**
+	 * Utility for defining [environment variables](https://svelte.dev/docs/kit/environment-variables),
+	 * which are made available via `$app/env/public` and `$app/env/private`.
+	 * @deprecated Import `defineEnvVars` from `@sveltejs/kit/env` instead
+	 */
+	export function defineEnvVars<T extends Record<string, EnvVarConfig<any>>>(variables: T): T;
 	/**
 	 * A helper function for sequencing multiple `handle` calls in a middleware-like manner.
 	 * The behavior for the `handle` options is as follows:
@@ -3036,11 +3167,39 @@ declare module '@sveltejs/kit/node/polyfills' {
 }
 
 declare module '@sveltejs/kit/vite' {
+	import type { KitConfig } from '@sveltejs/kit';
+	import type { Options, SvelteConfig } from '@sveltejs/vite-plugin-svelte';
 	import type { Plugin } from 'vite';
 	/**
 	 * Returns the SvelteKit Vite plugins.
+	 * Since version 2.62.0 you can pass [configuration](configuration) directly, in which case `svelte.config.js` is ignored.
+	 * Any options that don't belong to SvelteKit are passed through to `vite-plugin-svelte`.
 	 * */
-	export function sveltekit(): Promise<Plugin[]>;
+	export function sveltekit(config?: KitConfig & Omit<Options, "onwarn"> & Pick<SvelteConfig, "vitePlugin">): Promise<Plugin[]>;
+
+	export {};
+}
+
+declare module '$app/env' {
+	/**
+	 * `true` if the app is running in the browser.
+	 */
+	export const browser: boolean;
+
+	/**
+	 * Whether the dev server is running. This is not guaranteed to correspond to `NODE_ENV` or `MODE`.
+	 */
+	export const dev: boolean;
+
+	/**
+	 * SvelteKit analyses your app during the `build` step by running it. During this process, `building` is `true`. This also applies during prerendering.
+	 */
+	export const building: boolean;
+
+	/**
+	 * The value of `config.kit.version.name`.
+	 */
+	export const version: string;
 
 	export {};
 }
@@ -3250,7 +3409,7 @@ declare module '$app/navigation' {
 }
 
 declare module '$app/paths' {
-	import type { RouteIdWithSearchOrHash, PathnameWithSearchOrHash, ResolvedPathname, RouteId, RouteParams, Asset, Pathname as Pathname_1 } from '$app/types';
+	import type { RouteIdWithSearchOrHash, PathnameWithSearchOrHash, ResolvedPathname, RouteId, RouteParams, Asset, Pathname } from '$app/types';
 	/**
 	 * A string that matches [`config.kit.paths.base`](https://svelte.dev/docs/kit/configuration#paths).
 	 *
@@ -3347,7 +3506,7 @@ declare module '$app/paths' {
 	 * @since 2.52.0
 	 *
 	 * */
-	export function match(url: Pathname_1 | URL | (string & {})): Promise<{
+	export function match(url: Pathname | URL | (string & {})): Promise<{
 		id: RouteId;
 		params: Record<string, string>;
 	} | null>;
@@ -3426,7 +3585,7 @@ declare module '$app/server' {
 	 *
 	 * @since 2.27
 	 */
-	export function form<Schema extends StandardSchemaV1<RemoteFormInput, Record<string, any>>, Output>(validate: Schema, fn: (data: StandardSchemaV1.InferOutput<Schema>, issue: InvalidField<StandardSchemaV1.InferInput<Schema>>) => MaybePromise<Output>): RemoteForm<StandardSchemaV1.InferInput<Schema>, Output>;
+	export function form<Schema extends StandardSchemaV1<RemoteFormInput, Record<string, any>>, Output>(validate: true extends HasNonOptionalBoolean<StandardSchemaV1.InferInput<Schema>> ? "Error: All booleans in form schemas must be optional (e.g. `v.optional(v.boolean(), false)`) because checkbox inputs do not send a false value when unchecked." : Schema, fn: (data: StandardSchemaV1.InferOutput<Schema>, issue: InvalidField<StandardSchemaV1.InferInput<Schema>>) => MaybePromise<Output>): RemoteForm<StandardSchemaV1.InferInput<Schema>, Output>;
 	/**
 	 * Creates a remote prerender function. When called from the browser, the function will be invoked on the server via a `fetch` call.
 	 *
@@ -3514,8 +3673,8 @@ declare module '$app/server' {
 		function live<Schema extends StandardSchemaV1, Output>(schema: Schema, fn: (arg: StandardSchemaV1.InferOutput<Schema>) => RemoteLiveQueryUserFunctionReturnType<Output>): RemoteLiveQueryFunction<StandardSchemaV1.InferInput<Schema>, Output, StandardSchemaV1.InferOutput<Schema>>;
 	}
 	/**
-	 * In the context of a remote `command` or `form` request, returns an iterable
-	 * of `{ arg, query }` entries for the refreshes requested by the client, up to
+	 * Inside a remote `command` or `form` callback, returns an iterable
+	 * of `{ arg, query }` entries for the query instances the client asked to refresh, up to
 	 * the supplied `limit`. Each `query` is a `RemoteQuery` bound to the original
 	 * client-side cache key, so `refresh()` / `set()` propagate correctly even when
 	 * the query's schema transforms the input. `arg` is the *validated* argument,
@@ -3524,6 +3683,8 @@ declare module '$app/server' {
 	 *
 	 * Arguments that fail validation or exceed `limit` are recorded as failures in
 	 * the response to the client.
+	 * See [Client-requested refreshes](https://svelte.dev/docs/kit/remote-functions#Single-flight-mutations-Client-requested-refreshes)
+	 * for usage in a remote `command` or `form`.
 	 *
 	 * @example
 	 * ```ts
@@ -3554,14 +3715,16 @@ declare module '$app/server' {
 	 * */
 	export function requested<Input, Output, Validated = Input>(query: RemoteQueryFunction<Input, Output, Validated>, limit: number): QueryRequestedResult<Validated, Output>;
 	/**
-	 * In the context of a remote `command` or `form` request, returns an iterable
-	 * of `{ arg, query }` entries for the reconnects requested by the client, up to
+	 * Inside a remote `command` or `form` callback, returns an iterable
+	 * of `{ arg, query }` entries for the live query instances the client asked to reconnect, up to
 	 * the supplied `limit`. Each `query` is a `RemoteLiveQuery` bound to the original
 	 * client-side cache key, so `reconnect()` propagates correctly even when
 	 * the query's schema transforms the input. `arg` is the *validated* argument.
 	 *
 	 * Arguments that fail validation or exceed `limit` are recorded as failures in
 	 * the response to the client.
+	 * See [Client-requested refreshes](https://svelte.dev/docs/kit/remote-functions#Single-flight-mutations-Client-requested-refreshes)
+	 * for usage in a remote `command` or `form`.
 	 *
 	 * @example
 	 * ```ts
@@ -3593,6 +3756,19 @@ declare module '$app/server' {
 	>;
 	type RemotePrerenderInputsGenerator<Input = any> = () => MaybePromise<Input[]>;
 	type MaybePromise<T> = T | Promise<T>;
+
+	type IsAny<T> = 0 extends 1 & T ? true : false;
+
+	type HasNonOptionalBoolean<T> =
+		IsAny<T> extends true
+			? never
+			: [T] extends [boolean]
+				? true
+				: T extends Array<infer U>
+					? HasNonOptionalBoolean<U>
+					: T extends Record<string, any>
+						? { [K in keyof T]: HasNonOptionalBoolean<T[K]> }[keyof T]
+						: never;
 
 	export {};
 }
@@ -3697,7 +3873,9 @@ declare module '$app/stores' {
 	};
 
 	export {};
-}/**
+}
+
+/**
  * It's possible to tell SvelteKit how to type objects inside your app by declaring the `App` namespace. By default, a new project will have a file called `src/app.d.ts` containing the following:
  *
  * ```ts
