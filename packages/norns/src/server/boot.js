@@ -2,6 +2,7 @@ import { sequence } from '@sveltejs/kit/hooks';
 import { Container } from './container.js';
 import { contextHandle } from './handle/context.js';
 import { errorHandle } from './handle/error.js';
+import { setSerializer } from './route.js';
 
 /**
  * Create a fresh root container with no features registered. Useful for tests
@@ -36,7 +37,8 @@ export function createApp() {
  * @param {{
  *   features?: Record<string, FeatureModule>,
  *   extraHandle?: import('@sveltejs/kit').Handle | import('@sveltejs/kit').Handle[],
- *   handleError?: import('@sveltejs/kit').HandleServerError
+ *   handleError?: import('@sveltejs/kit').HandleServerError,
+ *   serializer?: import('./route.js').Serializer | null
  * }} [opts]
  * @returns {Promise<{
  *   container: Container,
@@ -46,6 +48,10 @@ export function createApp() {
  */
 export async function boot(opts = {}) {
 	const container = createApp();
+
+	// App-wide route() response serializer (e.g. tronSerializer() from
+	// @human-synthesis/norns-tron/server). Omit to keep plain JSON.
+	if (opts.serializer !== undefined) setSerializer(opts.serializer);
 
 	if (opts.features) {
 		for (const [path, mod] of Object.entries(opts.features)) {
