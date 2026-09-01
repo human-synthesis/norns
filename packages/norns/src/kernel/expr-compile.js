@@ -147,7 +147,10 @@ export function compileWhere(ast, ctx) {
 		if ('path' in node) return ops.eq(column(node.path), true);
 		if (node.owner === true) {
 			if (!ownerField) throw new Error('cannot compile `owner` without ownerField');
-			return ops.eq(column([ownerField]), user?.id);
+			// Anonymous user → deny, matching evalExpr. Binding undefined into
+			// `owner = ?` is a driver error on D1 rather than an empty result.
+			if (user?.id == null) return ops.bool(false);
+			return ops.eq(column([ownerField]), user.id);
 		}
 		if ('role' in node) return ops.bool(!!user?.roles?.includes(node.role));
 		switch (node.op) {

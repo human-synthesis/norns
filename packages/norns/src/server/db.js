@@ -100,7 +100,11 @@ export async function betterSqlite(path, opts = {}) {
  * @returns {Promise<any>}
  */
 export async function d1(binding, opts = {}) {
-	const { drizzle } = await importDynamic('drizzle-orm/d1');
+	// Literal specifier on purpose: wrangler's esbuild must bundle the D1
+	// driver into the worker (a runtime importDynamic() can never resolve
+	// inside a workerd bundle). Safe to resolve statically — drizzle-orm is
+	// a hard dependency of every generated app, unlike the native drivers.
+	const { drizzle } = await import('drizzle-orm/d1');
 	return drizzle(binding, opts.drizzle);
 }
 

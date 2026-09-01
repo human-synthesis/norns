@@ -128,6 +128,13 @@ describe('compileWhere', () => {
 		expect(where('not status == "draft"')({ status: 'paid' })).toBe(true);
 	});
 
+	test('anonymous user compiles `owner` to deny-all, not an undefined binding', () => {
+		const rowOwnedByNobody = { customer: undefined };
+		expect(where('owner', { user: null })(rowOwnedByNobody)).toBe(false);
+		expect(where('owner', { user: {} })({ customer: 'u1' })).toBe(false);
+		expect(where('owner or role:admin', { user: null })({ customer: 'u1' })).toBe(false);
+	});
+
 	test('rejects what SQL cannot express', () => {
 		expect(() => where('a.b == 1')).toThrow(/nested path/);
 		expect(() => where('status == total')).toThrow(/column-vs-literal/);
