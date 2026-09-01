@@ -1,5 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { validate, ValidationError } from './validate.js';
+import { publishRefresh } from './live.js';
 
 /** @typedef {import('@sveltejs/kit').ServerLoadEvent} ServerLoadEvent */
 /** @typedef {import('@sveltejs/kit').RequestEvent} RequestEvent */
@@ -52,9 +53,10 @@ export const page = {
 
 	/**
 	 * Wrap a SvelteKit `actions` object. Each action takes `{ input?, run }`
-	 * — `input` is a schema, `run` is the handler.
+	 * — `input` is a schema, `run` is the handler. An action's `refresh` list
+	 * is published through the container's live bridge after a successful run.
 	 *
-	 * @param {Record<string, { input?: any, run: (ctx: ActionContext) => any | Promise<any> }>} spec
+	 * @param {Record<string, { input?: any, run: (ctx: ActionContext) => any | Promise<any>, refresh?: string[] }>} spec
 	 * @returns {Record<string, (event: RequestEvent) => Promise<any>>}
 	 */
 	actions(spec) {
@@ -78,12 +80,14 @@ export const page = {
 						throw e;
 					}
 				}
-				return def.run({
+				const result = await def.run({
 					input,
 					container: event.locals.container,
 					event,
 					user: event.locals.user
 				});
+				await publishRefresh(event.locals.container, def.refresh);
+				return result;
 			};
 		}
 		return out;

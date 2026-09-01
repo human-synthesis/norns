@@ -576,6 +576,21 @@ describe('nornsAutoImport — preprocessor', () => {
 		expect(out).toContain(`import Button from '$lib/components/Button.n';`);
 	});
 
+	test('spec-first projects default component imports to $custom/lib', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
+		mkdirSync(join(root, 'specs'), { recursive: true });
+		mkdirSync(join(root, 'src/lib/components'), { recursive: true });
+		writeFileSync(join(root, 'src/lib/components/Card.svelte'), '<div></div>');
+
+		// in spec-first mode $lib points at .norns/generated/lib, so a $lib
+		// specifier would miss the hand-written src/lib component entirely
+		const pp = nornsAutoImport({ helpers: false, root });
+		const file = `<script></script>\n<Card />`;
+		const out = await drive(pp, file, ``, '/tmp/Page.svelte');
+
+		expect(out).toContain(`import Card from '$custom/lib/components/Card.svelte';`);
+	});
+
 	test('lowercase tag names never resolve to components', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'norns-ai-'));
 		mkdirSync(join(root, 'src/lib/components'), { recursive: true });

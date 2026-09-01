@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { watch, realpathSync, readFileSync, lstatSync, readdirSync, rmSync } from 'node:fs';
+import { watch, realpathSync, readFileSync, lstatSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import {
@@ -100,7 +100,31 @@ function findViteBin(root) {
 	return join(dirname(pkgPath), binEntry);
 }
 
-function devCommand(passthrough) {
+/**
+ * Spec-first regeneration hook. Returns null when the app has no `specs/`
+ * dir; otherwise a closure that (re)generates `.norns/generated/` and
+ * reports refusals without throwing.
+ */
+async function makeSpecRegen(cwd) {
+	if (!existsSync(join(cwd, 'specs'))) return null;
+	const { generateApp } = await import('../src/kernel/index.js');
+	return () => {
+		try {
+			const result = generateApp(join(cwd, 'specs'));
+			if (result.written.length > 0) {
+				console.log(
+					`[norns] generated ${result.written.length} file(s) (spec ${result.version.slice(0, 12)})`
+				);
+			}
+			return true;
+		} catch (err) {
+			console.error(`[norns] generate refused:\n${err.message}`);
+			return false;
+		}
+	};
+}
+
+async function devCommand(passthrough) {
 	const cwd = process.cwd();
 	const cleaned = cleanShadowedFrameworkPkgs(cwd);
 	if (cleaned.length > 0) {
@@ -109,6 +133,25 @@ function devCommand(passthrough) {
 				`— the workspace symlinks at the parent will be used instead.`
 		);
 	}
+
+	const regen = await makeSpecRegen(cwd);
+	if (regen) {
+		regen();
+		const specsDir = join(cwd, 'specs');
+		let specDebounce = null;
+		try {
+			watch(specsDir, { recursive: true }, () => {
+				clearTimeout(specDebounce);
+				// Vite HMR picks up the rewritten files in .norns/generated/ itself;
+				// a failed regenerate keeps serving the last good tree.
+				specDebounce = setTimeout(() => regen(), 100);
+			});
+			console.log(`[norns] watching specs: ${specsDir}`);
+		} catch (err) {
+			console.warn(`[norns] could not watch ${specsDir}: ${err.message}`);
+		}
+	}
+
 	const viteBin = findViteBin(cwd);
 	const watchSrcs = resolveWorkspaceFrameworkSrcs(cwd);
 
@@ -177,8 +220,14 @@ function devCommand(passthrough) {
 	spawnVite();
 }
 
-function passthroughCommand(name, passthrough) {
+async function passthroughCommand(name, passthrough) {
 	const cwd = process.cwd();
+
+	if (name === 'build') {
+		const regen = await makeSpecRegen(cwd);
+		if (regen && !regen()) process.exit(1);
+	}
+
 	const cleaned = cleanShadowedFrameworkPkgs(cwd);
 	if (cleaned.length > 0) {
 		console.log(
@@ -205,6 +254,8 @@ function migrateCommand(rest) {
 	}
 	try {
 		switch (sub) {
+			case 'gen':
+				return runMigrateGen(rest.slice(1));
 			case 'status':
 				return runMigrateStatus(cwd);
 			case 'up':
@@ -216,7 +267,7 @@ function migrateCommand(rest) {
 			}
 			default:
 				console.error(`norns migrate: unknown subcommand "${sub}"`);
-				console.error('Usage: norns migrate <status|up|create <feature>/<name>>');
+				console.error('Usage: norns migrate <gen|status|up|create <feature>/<name>>');
 				process.exit(1);
 		}
 	} catch (err) {
@@ -273,6 +324,82 @@ function openTargetDb(cwd) {
 	return openSqliteDb(cwd, target.path);
 }
 
+async function validateCommand(rest) {
+	try {
+		const { validateSpecs } = await import('../src/kernel/index.js');
+		const result = validateSpecs(rest[0]);
+		for (const issue of result.issues) {
+			console.log(`[${issue.level}] ${issue.address}: ${issue.message}`);
+		}
+		if (result.ok) {
+			console.log(
+				`spec ok — ${result.modules.length} module(s), version ${result.version.slice(0, 12)}`
+			);
+		} else {
+			process.exit(1);
+		}
+	} catch (err) {
+		console.error(err.message);
+		process.exit(1);
+	}
+}
+
+async function runMigrateGen(rest) {
+	try {
+		const { migrateApp } = await import('../src/kernel/index.js');
+		const force = rest.includes('--force');
+		const dir = rest.find((a) => !a.startsWith('--'));
+		const result = await migrateApp(dir, { force });
+		const modules = Object.keys(result.created);
+		if (modules.length === 0) {
+			console.log('migrations up to date — no schema changes');
+			return;
+		}
+		for (const m of modules) {
+			for (const f of result.created[m]) console.log(`created migrations/${m}/${f}`);
+		}
+	} catch (err) {
+		console.error(err.message);
+		process.exit(1);
+	}
+}
+
+async function generateCommand(rest) {
+	try {
+		const { generateApp } = await import('../src/kernel/index.js');
+		const result = generateApp(rest[0]);
+		console.log(`generated ${result.written.length} file(s) at spec version ${result.version}`);
+	} catch (err) {
+		console.error(err.message);
+		process.exit(1);
+	}
+}
+
+async function traceCommand(rest) {
+	try {
+		const { traceApp } = await import('../src/kernel/index.js');
+		const report = await traceApp(rest[0]);
+		for (const c of report.cases) {
+			const mark = c.pass ? '✓' : '✗';
+			console.log(`${mark} ${c.address} #${c.index}`);
+			if (!c.pass) {
+				if (c.error) console.log(`    error: ${c.error}${c.status ? ` (${c.status})` : ''}`);
+				console.log(`    input:  ${JSON.stringify(c.input)}`);
+				console.log(`    expect: ${JSON.stringify(c.expect)}`);
+				if (c.row) console.log(`    row:    ${JSON.stringify(c.row)}`);
+				if (c.result !== undefined) console.log(`    result: ${JSON.stringify(c.result)}`);
+			}
+			for (const e of c.events) console.log(`    emit ${e.name}`);
+			for (const call of c.calls) console.log(`    call ${call.name}`);
+		}
+		console.log(`${report.pass} pass, ${report.fail} fail (spec ${report.version.slice(0, 12)})`);
+		process.exit(report.fail > 0 ? 1 : 0);
+	} catch (err) {
+		console.error(err.message);
+		process.exit(1);
+	}
+}
+
 function lintCommand() {
 	const findings = nornsLint(process.cwd());
 	const { errors } = printFindings(findings);
@@ -312,6 +439,15 @@ switch (cmd) {
 	case 'lint':
 		lintCommand();
 		break;
+	case 'validate':
+		validateCommand(rest);
+		break;
+	case 'generate':
+		generateCommand(rest);
+		break;
+	case 'trace':
+		traceCommand(rest);
+		break;
 	case 'diag':
 		diagCommand(rest);
 		break;
@@ -320,12 +456,16 @@ switch (cmd) {
 		console.log(`norns <command>
 
 Commands:
-  dev                                start vite dev with framework-source watching (default)
-  build                              run vite build
+  dev                                start vite dev; watches specs/ → regenerate (spec-first) and framework src (default)
+  build                              generate from specs/ (spec-first), then run vite build
   preview                            run vite preview
+  migrate gen [dir] [--force]        diff specs against migrations/ via drizzle-kit (additive-only)
   migrate status                     list applied + pending migrations
   migrate up                         apply pending migrations
   migrate create <feature>/<name>    scaffold a new SQL migration
+  validate [dir]                     validate specs/*.tron (default dir: ./specs)
+  generate [dir]                     validate specs and generate code into .norns/generated/
+  trace [dir]                        run Action examples against a sandboxed in-memory SQLite
   lint                               scan .c/.civet/.n + vite.config for known AI pitfalls
   diag <file>                        print the compiled JS for a .c/.civet/.n file
 

@@ -1,0 +1,1 @@
+{ "dialect": "d1", "name": "shop", "modules": ["orders", "catalog"] }

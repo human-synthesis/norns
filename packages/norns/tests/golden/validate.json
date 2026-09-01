@@ -1,0 +1,9 @@
+{
+	"ok": true,
+	"version": "5845757515f7f4d165032b4f0305d7acf6f7477870a2b482c932a443e602f91c",
+	"modules": [
+		"catalog",
+		"orders"
+	],
+	"issues": []
+}

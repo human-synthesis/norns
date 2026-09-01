@@ -1,0 +1,1 @@
+{ "module": "catalog", "entities": { "Product": { "fields": { "title": { "type": "text" } } } } }

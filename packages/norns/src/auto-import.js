@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 
 // `match`: optional regex tested against the filename. When set, the helper
@@ -658,7 +658,10 @@ function renderImports(entries) {
  *   glob). Default `['.c', '.civet', '.js']` — `.ts` excluded because
  *   regex-scanned `.ts` can't reliably distinguish value vs type-only exports.
  * @param {string} [options.libRoot]   Default `'src/lib'`.
- * @param {string} [options.libAlias]  Default `'$lib'`.
+ * @param {string} [options.libAlias]  Default `'$lib'` — except in spec-first
+ *   projects (a `specs/` dir at the root), where `nornsConfig` points `$lib`
+ *   at `.norns/generated/lib`, so hand-written components under `src/lib`
+ *   default to the `$custom/lib` alias (`$custom` → `src`) instead.
  * @param {string} [options.root]      Default `process.cwd()`.
  * @param {(msg: string) => void} [options.log]
  *   Channel for conflict warnings. Default `console.warn`. Tests pass a
@@ -672,7 +675,8 @@ export function nornsAutoImport(options = {}) {
 	const componentExts = options.componentExtensions ?? DEFAULT_COMPONENT_EXTS;
 	const exportExts = options.exportExtensions ?? DEFAULT_EXPORT_EXTS;
 	const libRoot = options.libRoot ?? DEFAULT_LIB_ROOT;
-	const libAlias = options.libAlias ?? DEFAULT_LIB_ALIAS;
+	const specFirst = existsSync(join(root, 'specs'));
+	const libAlias = options.libAlias ?? (specFirst ? '$custom/lib' : DEFAULT_LIB_ALIAS);
 	const componentSpecs = options.components ?? null;
 	const log = options.log ?? console.warn;
 

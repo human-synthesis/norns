@@ -1,0 +1,52 @@
+[
+	{
+		"from": "orders.Query.board",
+		"to": "orders.Entity.Order",
+		"type": "reads"
+	},
+	{
+		"from": "orders.Action.submit",
+		"to": "orders.Entity.Order",
+		"type": "writes"
+	},
+	{
+		"from": "orders.Action.submit",
+		"to": "event:order.submitted",
+		"type": "emits"
+	},
+	{
+		"from": "orders.Action.submit",
+		"to": "orders.Query.board",
+		"type": "refreshes"
+	},
+	{
+		"from": "orders.Policy.Order",
+		"to": "orders.Entity.Order",
+		"type": "guards"
+	},
+	{
+		"from": "orders.Page.board",
+		"to": "orders.Query.board",
+		"type": "binds"
+	},
+	{
+		"from": "orders.Page.board",
+		"to": "orders.Action.submit",
+		"type": "binds"
+	},
+	{
+		"from": "event:catalog.Product.deleted",
+		"to": "orders.Trigger.catalog.Product.deleted",
+		"type": "on"
+	},
+	{
+		"from": "orders.Trigger.catalog.Product.deleted",
+		"to": "orders.Action.cancelLineItems",
+		"type": "calls"
+	},
+	{
+		"from": "orders.Component.OrderTimeline",
+		"to": "orders.Action.open",
+		"type": "calls"
+	}
+]

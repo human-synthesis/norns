@@ -15,6 +15,13 @@ import { nornsPreprocess } from '@human-synthesis/norns-core/preprocess';
  *   path is the non-invasive way to make `.c`/`.civet` hooks discoverable.
  *   Same for the client and universal counterparts.
  * - `preprocess: nornsPreprocess()`         — Pug + Civet
+ * - `kit.alias.$custom` → `src` — generated Level-2 shells import their
+ *   hand-written bodies through this alias
+ * - Spec-first mode: when a `specs/` dir exists, `kit.files.routes` and
+ *   `kit.files.lib` point into `.norns/generated/` (the emitted tree owns the
+ *   app; `src/` holds custom bodies only), and hook detection also searches
+ *   the generated tree (`src/` wins — a hand-written hook is a deliberate
+ *   override).
  *
  * Spread your own overrides at the call site to extend or replace defaults.
  *
@@ -33,11 +40,16 @@ export function nornsConfig(overrides = {}) {
 	const userFiles = kitOverrides.files ?? {};
 	const userHooks = userFiles.hooks ?? {};
 
+	const specFirst = existsSync(join(cwd, 'specs'));
+	const gen = join('.norns', 'generated');
+	const hookDirs = specFirst ? ['src', gen] : ['src'];
+	const candidates = (name) => hookDirs.flatMap((d) => [join(d, `${name}.c`), join(d, `${name}.civet`)]);
+
 	const hooks = {
 		...userHooks,
-		server: userHooks.server ?? findHook(cwd, ['src/hooks.server.c', 'src/hooks.server.civet']),
-		client: userHooks.client ?? findHook(cwd, ['src/hooks.client.c', 'src/hooks.client.civet']),
-		universal: userHooks.universal ?? findHook(cwd, ['src/hooks.c', 'src/hooks.civet'])
+		server: userHooks.server ?? findHook(cwd, candidates('hooks.server')),
+		client: userHooks.client ?? findHook(cwd, candidates('hooks.client')),
+		universal: userHooks.universal ?? findHook(cwd, candidates('hooks'))
 	};
 	// Drop keys whose value is undefined so SvelteKit applies its defaults
 	for (const k of /** @type {const} */ (['server', 'client', 'universal'])) {
@@ -52,7 +64,9 @@ export function nornsConfig(overrides = {}) {
 		kit: {
 			moduleExtensions: ['.js', '.ts', '.c', '.civet'],
 			...kitRest,
+			alias: { $custom: 'src', ...kitRest.alias },
 			files: {
+				...(specFirst && { routes: join(gen, 'routes'), lib: join(gen, 'lib') }),
 				...userFiles,
 				hooks
 			}

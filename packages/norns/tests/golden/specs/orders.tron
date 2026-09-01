@@ -1,0 +1,45 @@
+{
+  "module": "orders",
+  "depends": ["core", "catalog"],
+  "components": {
+    "OrderTimeline": { "props": { "order": "Order" }, "events": { "select": "orders.Action.open" } }
+  },
+  "entities": {
+    "Order": {
+      "uid": "01J8QF0000AAAAAAAAAAAAAAAA",
+      "owner": "customer",
+      "fields": {
+        "customer": { "type": "ref", "ref": "core.Entity.User" },
+        "note": { "type": "text", "optional": true },
+        "total": { "type": "money" }
+      },
+      "status": { "cancelled": [], "draft": ["submitted"], "paid": [], "submitted": ["paid", "cancelled"] }
+    }
+  },
+  "queries": { "board": { "from": "Order", "live": true, "groupBy": "status" } },
+  "actions": {
+    "cancelLineItems": { "input": { "id": "Order.id" } },
+    "open": { "input": { "id": "Order.id" } },
+    "price": {
+      "input": { "id": "Order.id" },
+      "examples": [{ "input": { "id": "$draft" }, "expect": { "total": 100 } }],
+      "impl": "custom"
+    },
+    "submit": {
+      "input": { "id": "Order.id" },
+      "requires": "status == draft",
+      "steps": [{ "set": { "status": "submitted", "entity": "Order" } }, { "emit": "order.submitted" }],
+      "refresh": ["orders.Query.board"],
+      "examples": [{ "input": { "id": "$draft" }, "expect": { "status": "submitted" } }]
+    }
+  },
+  "policies": { "Order": { "read": "owner or role:admin", "write": "owner" } },
+  "pages": {
+    "board": {
+      "route": "/orders",
+      "state": { "selected": "Order.id?" },
+      "components": [{ "kanban": "orders.Query.board", "onMove": "orders.Action.submit" }]
+    }
+  },
+  "triggers": { "catalog.Product.deleted": "orders.Action.cancelLineItems" }
+}

@@ -137,6 +137,67 @@ export async function postgres(url, opts = {}) {
 }
 
 /**
+ * Apply committed SQL migrations to a SQLite-backed Drizzle instance.
+ *
+ * Walks `dirs` (a root like `migrations/` whose subdirectories are module
+ * migration sets, or an explicit list of dirs), applies `*.sql` files in
+ * name order, and records each in `_norns_migrations` so re-runs are
+ * no-ops. Statements are split on drizzle-kit's `--> statement-breakpoint`
+ * marker. Local/dev helper — production D1 migrates via
+ * `wrangler d1 migrations apply`.
+ *
+ * @param {any} db Drizzle SQLite instance
+ * @param {string | string[]} dirs
+ * @returns {Promise<string[]>} ids of newly applied migration files
+ */
+export async function applyMigrations(db, dirs) {
+	const [{ sql }, fs, path] = await Promise.all([
+		importDynamic('drizzle-orm'),
+		importDynamic('node:fs'),
+		importDynamic('node:path')
+	]);
+	await db.run(sql.raw('CREATE TABLE IF NOT EXISTS "_norns_migrations" ("name" text PRIMARY KEY)'));
+	const rows = await db.all(sql.raw('SELECT "name" FROM "_norns_migrations"'));
+	const applied = new Set(rows.map((r) => r.name));
+
+	const byName = (a, b) => a.localeCompare(b);
+	const files = [];
+	for (const root of Array.isArray(dirs) ? dirs : [dirs]) {
+		if (!fs.existsSync(root)) continue;
+		const entries = fs.readdirSync(root, { withFileTypes: true });
+		for (const entry of entries.sort((a, b) => byName(a.name, b.name))) {
+			if (entry.isDirectory()) {
+				const sqls = fs
+					.readdirSync(path.join(root, entry.name))
+					.filter((f) => f.endsWith('.sql'))
+					.sort(byName);
+				for (const f of sqls) {
+					files.push({ id: `${entry.name}/${f}`, file: path.join(root, entry.name, f) });
+				}
+			} else if (entry.name.endsWith('.sql')) {
+				files.push({ id: entry.name, file: path.join(root, entry.name) });
+			}
+		}
+	}
+
+	const ran = [];
+	for (const { id, file } of files) {
+		if (applied.has(id)) continue;
+		const text = fs.readFileSync(file, 'utf-8');
+		const stmts = text
+			.split(/-->\s*statement-breakpoint/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+		for (const stmt of stmts) await db.run(sql.raw(stmt));
+		await db.run(
+			sql.raw(`INSERT INTO "_norns_migrations" ("name") VALUES ('${id.replaceAll("'", "''")}')`)
+		);
+		ran.push(id);
+	}
+	return ran;
+}
+
+/**
  * Run `fn` inside a Drizzle transaction. Uniform across drivers.
  *
  * @template T

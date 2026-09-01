@@ -1,8 +1,12 @@
 import { sequence } from '@sveltejs/kit/hooks';
 import { Container } from './container.js';
 import { contextHandle } from './handle/context.js';
+import { authHandle } from './handle/auth.js';
 import { errorHandle } from './handle/error.js';
 import { setSerializer } from './route.js';
+import { createEvents, registerTriggers } from './events.js';
+import { createLive } from './live.js';
+import { scheduledHandler, startCronShim } from './cron.js';
 
 /**
  * Create a fresh root container with no features registered. Useful for tests
@@ -34,16 +38,42 @@ export function createApp() {
  * Each `module.c` must default-export a function `(app) -> ...` that calls
  * `app.bind(...)` / `app.single(...)` / `app.migrations(...)`.
  *
+ * Spec-first extras:
+ * - `triggers` — generated trigger tables (`lib/<m>/triggers.c` exports),
+ *   nested arrays are flattened. Event triggers are wired into the bus;
+ *   cron ones are served by the returned `scheduled` handler.
+ * - `queue` — Cloudflare Queues producer binding; `emit` enqueues instead of
+ *   dispatching in-process.
+ * - `cronShim: true` — local minute-timer for cron triggers (`norns dev`).
+ * - `auth` — a better-auth-shaped instance (`.handler(request)` +
+ *   `.api.getSession({ headers })`); requests under `authBasePath`
+ *   (default `/api/auth`) are handed to it, every other request gets
+ *   `event.locals.user` / `event.locals.session` and scope bindings.
+ * - `room` — the `ROOM` Durable Object namespace binding (Workers prod);
+ *   live-query publishes and the `/_norns/live` stream go through it. Omit
+ *   in dev: signals ride the in-process bus.
+ * - an `events` singleton is bound automatically unless a feature bound one,
+ *   and a `live` bridge singleton likewise (actions with `refresh` lists
+ *   publish through it).
+ *
  * @param {{
  *   features?: Record<string, FeatureModule>,
  *   extraHandle?: import('@sveltejs/kit').Handle | import('@sveltejs/kit').Handle[],
  *   handleError?: import('@sveltejs/kit').HandleServerError,
- *   serializer?: import('./route.js').Serializer | null
+ *   serializer?: import('./route.js').Serializer | null,
+ *   triggers?: *[],
+ *   queue?: { send(body: *): Promise<void> | void },
+ *   cronShim?: boolean,
+ *   room?: *,
+ *   auth?: { handler(request: Request): Promise<Response> | Response, api: { getSession(input: *): Promise<*> } },
+ *   authBasePath?: string
  * }} [opts]
  * @returns {Promise<{
  *   container: Container,
  *   handle: import('@sveltejs/kit').Handle,
- *   handleError: import('@sveltejs/kit').HandleServerError
+ *   handleError: import('@sveltejs/kit').HandleServerError,
+ *   scheduled: (event: *) => Promise<void>,
+ *   stopCronShim: () => void
  * }>}
  */
 export async function boot(opts = {}) {
@@ -73,8 +103,35 @@ export async function boot(opts = {}) {
 			: [opts.extraHandle]
 		: [];
 
-	const handle = sequence(contextHandle(container), ...extras);
+	if (!container.has('events')) {
+		container.single('events', () => createEvents(opts.queue ? { queue: opts.queue } : {}));
+	}
+	if (!container.has('live')) {
+		container.single('live', () =>
+			createLive({ events: container.resolve('events'), room: opts.room })
+		);
+	}
+
+	const triggers = (opts.triggers ?? []).flat(Infinity);
+	if (triggers.length > 0) {
+		registerTriggers(container, triggers.filter((t) => !t.schedule));
+	}
+	const stopCronShim = opts.cronShim ? startCronShim(container, triggers) : () => {};
+
+	// contextHandle must come first so authHandle can bind user/session into
+	// the per-request scope it creates.
+	const handle = sequence(
+		contextHandle(container),
+		...(opts.auth ? [authHandle(opts.auth, { basePath: opts.authBasePath })] : []),
+		...extras
+	);
 	const handleError = opts.handleError ?? errorHandle();
 
-	return { container, handle, handleError };
+	return {
+		container,
+		handle,
+		handleError,
+		scheduled: scheduledHandler(container, triggers),
+		stopCronShim
+	};
 }
