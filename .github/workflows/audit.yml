@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   Audit:
+    if: github.repository == 'sveltejs/kit' # fork-guard: upstream cron is inert on human-synthesis/norns
     # prevents this action from running on forks
     if: github.repository == 'sveltejs/kit'
     runs-on: ubuntu-latest
