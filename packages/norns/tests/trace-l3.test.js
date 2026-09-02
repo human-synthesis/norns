@@ -148,6 +148,29 @@ describe('traceApp L3 (K-25)', () => {
 		expect(room.broadcasts).toEqual([{ type: 'state', phase: 'playing' }]);
 	}, 30000);
 
+	// v6 K-46 — the report's findings 05 + 07: a body's relative sibling import
+	// (`./util.c`, the documented shim pattern) was rewritten to a scratch path
+	// that was never materialised, and a specifier merely mentioned inside a
+	// comment recursed ensureCustom into a stack overflow.
+	test('a relative sibling import is materialised; specifiers in comments are inert', async () => {
+		const crm = structuredClone(CRM);
+		const bodies = {
+			...BODIES,
+			'src/crm/functions/slugify.c':
+				"// note: import { x } from '$custom/crm/functions/slugify.c' must stay inert here\n" +
+				"import { dashify } from './util.c'\n" +
+				'export default async ({ input }) => ({ slug: dashify(input.title) })\n',
+			'src/crm/functions/util.c': "export dashify := (s) => s.toLowerCase().replaceAll(' ', '-')\n"
+		};
+		const root = appDir({ crm, bodies });
+		cleanup.push(root);
+		const report = await traceApp(join(root, 'specs'));
+
+		const slugify = report.cases.find((c) => c.address === 'crm.Function.slugify');
+		expect(slugify.pass).toBe(true);
+		expect(slugify.result).toEqual({ slug: 'hello-world' });
+	}, 30000);
+
 	test('an endpoint body violating its output contract fails its case', async () => {
 		const crm = structuredClone(CRM);
 		const bodies = { ...BODIES, 'src/crm/endpoints/webhook.c': `export default async () => ({ nope: 1 })\n` };

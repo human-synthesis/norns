@@ -34,7 +34,7 @@ import {
 	triggersEmitter
 } from './emit-units.js';
 import { machinesEmitter } from './emit-machines.js';
-import { wranglerFile } from './emit-wrangler.js';
+import { workerEntryFile, wranglerFile } from './emit-wrangler.js';
 import { emitFlow } from './flow.js';
 import { buildGraph } from './graph.js';
 import { loadSpecs, validateSpecs } from './validate.js';
@@ -996,6 +996,10 @@ export function generateApp(dir, opts = {}) {
 	const appChanged = cache.appHash !== specs.hashes.app;
 	if (pending.length > 0 || appChanged || !existsSync(join(outRoot, 'wrangler.json'))) {
 		pending.push(wranglerFile(specs));
+		// The wrangler config's ROOM binding names a Durable Object class —
+		// the entry that exports it is emitted with it, or deploy is DOA (v6 K-44).
+		const workerEntry = workerEntryFile(specs);
+		if (workerEntry) pending.push(workerEntry);
 	}
 	cache.appHash = specs.hashes.app;
 

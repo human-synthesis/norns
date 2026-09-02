@@ -104,6 +104,39 @@ describe('emitModuleActions', () => {
 		expect(file.text).toContain('input: v.strictObject({ id: v.pipe(v.string(), v.maxLength(128)) })');
 	});
 
+	// v6 K-41 — the report's finding 01: the object input form was ignored
+	// (v.unknown(), key still mandatory), and optional date inputs rejected
+	// the empty string a cleared <input type="date"> submits.
+	test('object-form inputs are typed, and optional means omittable', () => {
+		const mod = {
+			...ORDERS,
+			actions: {
+				quickAdd: {
+					input: {
+						title: { type: 'text' },
+						note: { type: 'text', optional: true },
+						due: 'date?',
+						parent: { type: 'text', optional: true }
+					},
+					impl: 'custom',
+					examples: [{ input: { title: 'x' } }]
+				}
+			}
+		};
+		const out = emitModuleActions('orders', mod, { app: APP, modules: { orders: mod, catalog: CATALOG } });
+		// typed, not v.unknown()
+		expect(out.text).toContain('title: v.pipe(v.string(), v.maxLength(10000))');
+		// optional object form wraps in v.optional — the key may be absent
+		expect(out.text).toContain('note: v.optional(v.pipe(v.string(), v.maxLength(10000)))');
+		expect(out.text).toContain('parent: v.optional(');
+		expect(out.text).not.toContain('note: v.unknown()');
+		// bare `date?` resolves to the date type and tolerates the cleared-field ''
+		expect(out.text).toContain(
+			"due: v.optional(v.union([v.pipe(v.literal(''), v.transform(() => undefined)), v.pipe(v.string(), v.isoDate())]))"
+		);
+		expect(compiles(out)).toContain('export const quickAdd');
+	});
+
 	test('impl: custom actions emit guard-first shells delegating to $custom', () => {
 		expect(file.text).toContain(`import priceBody from '$custom/orders/actions/price.c'`);
 		const shell = file.text.slice(file.text.indexOf('export price'), file.text.indexOf('export submit'));

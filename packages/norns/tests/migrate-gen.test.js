@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -7,6 +8,8 @@ import { writeSpec } from '@human-synthesis/norns-tron/spec';
 
 import { migrateApp } from '../src/kernel/index.js';
 import { APP, CATALOG, ORDERS } from './kernel-fixtures.js';
+
+const require = createRequire(import.meta.url);
 
 function nearestNodeModules() {
 	let dir = import.meta.dir;
@@ -86,6 +89,42 @@ describe('migrateApp', () => {
 		const sql = readFileSync(join(root, 'migrations', 'orders', files[2]), 'utf-8');
 		expect(sql).toMatch(/DROP COLUMN|__new_/);
 	});
+
+	// v6 K-45 — the report's finding 03: the rebuild's INSERT…SELECT read the
+	// *new* column list out of the *old* table (`no such column: category`), and
+	// a purely additive rebuild tripped DESTRUCTIVE_MIGRATION.
+	test('a rebuild with new columns selects only pre-existing ones and needs no --force', () => {
+		const withDefault = structuredClone(ORDERS);
+		delete withDefault.entities.Order.fields.trackingCode;
+		withDefault.entities.Order.fields.note = { type: 'text', optional: true, default: 'none' };
+		withDefault.entities.Order.fields.tags = { type: 'text', optional: true };
+		writeSpec(join(dir, 'orders.tron'), withDefault);
+
+		const result = migrateApp(dir); // no force — the rebuild drops nothing
+		expect(Object.keys(result.created)).toEqual(['orders']);
+		const files = sqlIn(root, 'orders');
+		const sql = readFileSync(join(root, 'migrations', 'orders', files[files.length - 1]), 'utf-8');
+		expect(sql).toContain('__new_orders_order');
+		const insert = sql.match(
+			/INSERT INTO `__new_orders_order`\(([^)]*)\) SELECT ([^;]*) FROM `orders_order`;/
+		);
+		expect(insert).not.toBeNull();
+		expect(insert[1]).not.toContain('tags');
+		expect(insert[2]).not.toContain('tags');
+
+		// The proof that matters: the whole chain applies to a real SQLite db.
+		const { Database } = require('bun:sqlite');
+		const db = new Database(':memory:');
+		for (const f of files) {
+			const text = readFileSync(join(root, 'migrations', 'orders', f), 'utf-8');
+			for (const stmt of text.split(/-->\s*statement-breakpoint/)) {
+				if (stmt.trim()) db.exec(stmt);
+			}
+		}
+		const cols = db.prepare('PRAGMA table_info(orders_order)').all().map((c) => c.name);
+		expect(cols).toContain('tags');
+		expect(cols).toContain('note');
+	}, 30_000);
 
 	test('postgres dialect produces pg SQL through the same pipeline', () => {
 		const pg = appDir({ app: { ...APP, dialect: 'postgres' }, orders: ORDERS, catalog: CATALOG });

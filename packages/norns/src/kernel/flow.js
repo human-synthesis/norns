@@ -125,6 +125,27 @@ function guardsOf(graph, address) {
 }
 
 /**
+ * The implicit ownership guard on a custom action with a dotted
+ * `Entity.id`-style input: the generated shell resolves the row, 404s on
+ * a miss and runs the entity policy's write check before the body runs.
+ * That guard has no graph edge (it comes from the input spelling, not a
+ * Policy.run entry), so the flow derives it here — a guarded action must
+ * never read as unguarded (v6 M-37).
+ */
+function implicitGuards(graph, moduleName, input) {
+	for (const key of Object.keys(input ?? {}).sort()) {
+		const ref = input[key];
+		if (typeof ref !== 'string') continue;
+		const entity = ref.replace(/\?$/, '').split('.')[0];
+		const guards = (graph.inbound.get(`${moduleName}.Entity.${entity}`) ?? [])
+			.filter((e) => e.type === 'guards')
+			.map((e) => e.from);
+		if (guards.length > 0) return [...new Set(guards)];
+	}
+	return [];
+}
+
+/**
  * Pipeline tree for one unit, or null for kinds without runtime flow.
  *
  * @returns {{ unit: string, stages: * } | null}
@@ -149,6 +170,7 @@ export function unitFlow(unit, { moduleName, graph, appRoot, bodies } = {}) {
 		case 'Action': {
 			stages.push({ kind: 'transport', mode: v.transport ?? 'form', src: 'spec' });
 			const guards = guardsOf(graph, address);
+			if (guards.length === 0) guards.push(...implicitGuards(graph, moduleName, v.input));
 			if (guards.length > 0) stages.push({ kind: 'policy', guards, src: 'generated' });
 			if (v.input) stages.push({ kind: 'validate', schema: 'input', src: 'generated' });
 			if (v.requires) stages.push({ kind: 'machine', requires: v.requires, src: 'spec' });

@@ -47,9 +47,38 @@ function resolveBare(spec) {
 	return import.meta.resolve(spec);
 }
 
-function rewriteImports(js, { scratch, appRoot, compileCivet }) {
-	return js.replace(/(from\s+)(['"])([^'"]+)\2/g, (whole, from, q, spec) => {
-		if (spec.startsWith('.')) return `${from}${q}${spec.replace(/\.c$/, '.js')}${q}`;
+/**
+ * Ranges of `//` and block comments in compiled JS, so import rewriting
+ * never follows a specifier that is merely mentioned in prose — a comment
+ * naming a `$custom/` path once recursed ensureCustom to a stack overflow
+ * (v6 K-46). Approximate (string literals containing `//` may extend a
+ * range), which errs toward leaving text untouched.
+ */
+function commentRanges(js) {
+	const ranges = [];
+	const re = /\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+	let m;
+	while ((m = re.exec(js)) !== null) ranges.push([m.index, m.index + m[0].length]);
+	return ranges;
+}
+
+function rewriteImports(js, { scratch, appRoot, compileCivet, srcDir }) {
+	const comments = commentRanges(js);
+	const inComment = (i) => comments.some(([a, b]) => i >= a && i < b);
+	return js.replace(/(from\s+)(['"])([^'"]+)\2/g, (whole, from, q, spec, offset) => {
+		if (inComment(offset)) return whole;
+		if (spec.startsWith('.')) {
+			// A body's relative sibling (`./db.c`) lives in `src/`, not in the
+			// scratch tree — materialise it too, or the rewritten path points at
+			// a file that is never written (v6 K-46). Generated-lib callers pass
+			// no srcDir; their relative imports stay sibling renames.
+			if (srcDir !== undefined && spec.endsWith('.c')) {
+				const rel = join(srcDir, spec);
+				const target = ensureCustom(rel, { scratch, appRoot, compileCivet });
+				return `${from}${q}${pathToFileURL(target).href}${q}`;
+			}
+			return `${from}${q}${spec.replace(/\.c$/, '.js')}${q}`;
+		}
 		if (spec.startsWith('$lib/')) {
 			const target = join(scratch, 'lib', spec.slice('$lib/'.length).replace(/\.c$/, '.js'));
 			return `${from}${q}${pathToFileURL(target).href}${q}`;
@@ -62,22 +91,37 @@ function rewriteImports(js, { scratch, appRoot, compileCivet }) {
 	});
 }
 
+// Re-entry guard: a genuine import cycle among sibling bodies must not
+// recurse ensureCustom forever; the in-flight target resolves to its path
+// and the file lands when the outermost call finishes writing.
+const CUSTOM_IN_FLIGHT = new Set();
+
 /** Compile a custom body `src/<rel>` into the scratch tree; missing bodies throw when invoked. */
 function ensureCustom(rel, { scratch, appRoot, compileCivet }) {
 	const target = join(scratch, 'custom', rel.replace(/\.c$/, '.js'));
-	if (!existsSync(target)) {
+	if (!existsSync(target) && !CUSTOM_IN_FLIGHT.has(target)) {
 		const src = join(appRoot, 'src', rel);
 		mkdirSync(dirname(target), { recursive: true });
-		if (existsSync(src)) {
-			writeFileSync(
-				target,
-				rewriteImports(compileCivet(readFileSync(src, 'utf-8')), { scratch, appRoot, compileCivet })
-			);
-		} else {
-			writeFileSync(
-				target,
-				`export default () => { throw new Error(${JSON.stringify(`missing custom body: src/${rel}`)}) }\n`
-			);
+		CUSTOM_IN_FLIGHT.add(target);
+		try {
+			if (existsSync(src)) {
+				writeFileSync(
+					target,
+					rewriteImports(compileCivet(readFileSync(src, 'utf-8')), {
+						scratch,
+						appRoot,
+						compileCivet,
+						srcDir: dirname(rel)
+					})
+				);
+			} else {
+				writeFileSync(
+					target,
+					`export default () => { throw new Error(${JSON.stringify(`missing custom body: src/${rel}`)}) }\n`
+				);
+			}
+		} finally {
+			CUSTOM_IN_FLIGHT.delete(target);
 		}
 	}
 	return target;

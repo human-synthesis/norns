@@ -176,6 +176,28 @@ describe('flowApp (K-24)', () => {
 		expect(flow.units['crm.Query.board'].stages[0]).toMatchObject({ kind: 'read', from: 'Deal', limit: 50 });
 		expect(flow.units['crm.Entity.Deal']).toBeUndefined();
 	});
+
+	// v6 M-37 — the report's finding 11: a custom action guarded only by its
+	// dotted `Entity.id` input (no steps, no Policy.run entry) showed no policy
+	// stage, so a guarded action read as unguarded.
+	test('the implicit dotted-id ownership guard appears as a policy stage', () => {
+		const root = mkdtempSync(join(tmpdir(), 'norns-flow-implicit-'));
+		cleanup.push(root);
+		const crm = structuredClone(CRM);
+		crm.actions.markReminded = {
+			input: { id: 'Deal.id' },
+			impl: 'custom',
+			examples: [{ input: { id: '$open' } }]
+		};
+		writeSpec(join(root, 'specs', 'app.tron'), APP);
+		writeSpec(join(root, 'specs', 'crm.tron'), crm);
+		const flow = flowApp(join(root, 'specs'));
+
+		const stages = flow.units['crm.Action.markReminded'].stages;
+		const policy = stages.find((s) => s.kind === 'policy');
+		expect(policy).toBeDefined();
+		expect(policy.guards).toEqual(['crm.Policy.Deal']);
+	});
 });
 
 describe('flowDelta (K-26)', () => {

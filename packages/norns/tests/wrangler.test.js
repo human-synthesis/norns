@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { writeSpec } from '@human-synthesis/norns-tron/spec';
 
 import { generateApp, layoutFile, wranglerConfig } from '../src/kernel/index.js';
+import { workerEntryFile } from '../src/kernel/emit-wrangler.js';
 import { APP, CATALOG, ORDERS } from './kernel-fixtures.js';
 
 const specsOf = (app, modules) => ({ app, modules });
@@ -14,9 +15,10 @@ describe('wranglerConfig', () => {
 	test('d1 app gets name, worker entry, assets and a DB binding', () => {
 		const config = wranglerConfig(specsOf(APP, { catalog: CATALOG }));
 		expect(config.name).toBe('shop');
-		expect(config.main).toBe('.svelte-kit/cloudflare/_worker.js');
+		// Paths resolve relative to `.norns/generated/`, where the config lives (v6 K-44).
+		expect(config.main).toBe('../../.svelte-kit/cloudflare/_worker.js');
 		expect(config.compatibility_flags).toEqual(['nodejs_compat']);
-		expect(config.assets).toEqual({ binding: 'ASSETS', directory: '.svelte-kit/cloudflare' });
+		expect(config.assets).toEqual({ binding: 'ASSETS', directory: '../../.svelte-kit/cloudflare' });
 		expect(config.d1_databases).toEqual([
 			{
 				binding: 'DB',
@@ -51,7 +53,15 @@ describe('wranglerConfig', () => {
 		expect(live.durable_objects).toEqual({
 			bindings: [{ name: 'ROOM', class_name: 'NornsRoom' }]
 		});
-		expect(live.migrations).toEqual([{ tag: 'norns-room-v1', new_classes: ['NornsRoom'] }]);
+		// SQLite-backed DO classes — the free-plan-eligible kind (v6 K-44).
+		expect(live.migrations).toEqual([{ tag: 'norns-room-v1', new_sqlite_classes: ['NornsRoom'] }]);
+		// A bound DO class must be exported by the entry the config names.
+		expect(live.main).toBe('./worker.js');
+		const entry = workerEntryFile(specsOf(APP, { orders: ORDERS }));
+		expect(entry.path).toBe('worker.js');
+		expect(entry.text).toContain("export { default } from '../../.svelte-kit/cloudflare/_worker.js';");
+		expect(entry.text).toContain('export class NornsRoom extends Room {}');
+		expect(workerEntryFile(specsOf(APP, { catalog: CATALOG }))).toBeNull();
 
 		const match = {
 			module: 'game',
@@ -61,6 +71,11 @@ describe('wranglerConfig', () => {
 			specsOf({ ...APP, settings: { cloudflare: { room_class: 'MatchRoom' } } }, { game: match })
 		);
 		expect(withWorker.durable_objects.bindings[0].class_name).toBe('MatchRoom');
+		expect(
+			workerEntryFile(
+				specsOf({ ...APP, settings: { cloudflare: { room_class: 'MatchRoom' } } }, { game: match })
+			).text
+		).toContain('export class MatchRoom extends Room {}');
 	});
 
 	test('worker name is lowercased and dashed', () => {
@@ -133,6 +148,10 @@ describe('generateApp wrangler output', () => {
 			const config = JSON.parse(readFileSync(file, 'utf-8'));
 			expect(config.name).toBe('shop');
 			expect(config.d1_databases[0].binding).toBe('DB');
+			// ORDERS carries a live query → the DO entry is emitted with the config (v6 K-44).
+			expect(first.written).toContain('worker.js');
+			const entry = readFileSync(join(root, '.norns', 'generated', 'worker.js'), 'utf-8');
+			expect(entry).toContain('export class NornsRoom extends Room {}');
 
 			// unchanged specs → all modules skipped, no rewrite
 			const second = generateApp(dir);

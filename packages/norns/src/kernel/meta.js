@@ -93,7 +93,10 @@ const Entity = v.strictObject({
 	uid,
 	owner: v.optional(ident),
 	fields: v.record(ident, field),
-	status: v.optional(v.record(ident, v.array(ident)))
+	status: v.optional(v.record(ident, v.array(ident))),
+	// The state new rows start in. Required (by refine) when the machine is
+	// cyclic — i.e. no single untargeted state identifies it (v6 K-42).
+	initial: v.optional(ident)
 });
 
 const Query = v.strictObject({

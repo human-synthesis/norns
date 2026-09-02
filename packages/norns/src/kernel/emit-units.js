@@ -257,6 +257,19 @@ export function actionEntity(moduleName, action, specs) {
 	return null;
 }
 
+/**
+ * Wrap an input schema for an optional key. Under `v.strictObject` this
+ * genuinely permits key absence. Optional date/datetime inputs also accept
+ * the empty string a cleared `<input type="date">` submits, coerced to
+ * `undefined` — transport truth, not leniency.
+ */
+function optionalInput(schema, type) {
+	if (type === 'date' || type === 'datetime') {
+		return `v.optional(v.union([v.pipe(v.literal(''), v.transform(() => undefined)), ${schema}]))`;
+	}
+	return `v.optional(${schema})`;
+}
+
 function inputSchema(moduleName, action, specs) {
 	const input = action.input ?? {};
 	const keys = Object.keys(input).sort();
@@ -270,9 +283,17 @@ function inputSchema(moduleName, action, specs) {
 			const def =
 				field === 'id'
 					? { type: 'text', max: 128 }
-					: normalizeField(specs.modules[moduleName]?.entities?.[entity]?.fields?.[field] ?? 'text');
+					: field === undefined && VALIBOT[entity]
+						? normalizeField(entity)
+						: normalizeField(specs.modules[moduleName]?.entities?.[entity]?.fields?.[field] ?? 'text');
 			schema = valibotFor(def) ?? 'v.string()';
-			if (optional) schema = `v.optional(${schema})`;
+			if (optional) schema = optionalInput(schema, def.type);
+		} else if (ref && typeof ref === 'object') {
+			// Object form `{ type, optional?, max? }` — same vocabulary as entity
+			// fields; meta admits it, so the emitter must honour it (v6 K-41).
+			const def = typeof ref.type === 'string' ? normalizeField(ref) : null;
+			schema = (def ? valibotFor(def) : undefined) ?? 'v.unknown()';
+			if (ref.optional === true) schema = optionalInput(schema, def?.type);
 		}
 		return `${key}: ${schema}`;
 	});
@@ -346,7 +367,7 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 			const valueExpr = (v) => {
 				if (v === '$user') return 'user?.id';
 				if (v === '$initial') {
-					return JSON.stringify(entitySpec?.status ? initialState(entitySpec.status) : null);
+					return JSON.stringify(entitySpec?.status ? initialState(entitySpec.status, entitySpec.initial) : null);
 				}
 				if (typeof v === 'string' && v.startsWith('input.')) return v;
 				return JSON.stringify(v);

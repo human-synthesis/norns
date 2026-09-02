@@ -60,7 +60,10 @@ function importDynamic(mod) {
  *
  * Backend is runtime-selected: `bun:sqlite` + `drizzle-orm/bun-sqlite` under
  * Bun (built-in, no native build, works on Alpine), `better-sqlite3` +
- * `drizzle-orm/better-sqlite3` under Node. The function name keeps the
+ * `drizzle-orm/better-sqlite3` under Node, and — when the native addon is
+ * missing or fails to load — Node's built-in `node:sqlite` behind a
+ * better-sqlite3-shaped shim (v6 K-47), so trace/snapshot tooling works in
+ * containers with no native build at all. The function name keeps the
  * `betterSqlite` alias for backward compatibility — what actually gets
  * loaded depends on the runtime.
  *
@@ -81,15 +84,62 @@ export async function betterSqlite(path, opts = {}) {
 		}
 		return drizzle(sqlite, opts.drizzle);
 	}
-	const [{ default: Database }, { drizzle }] = await Promise.all([
-		importDynamic('better-sqlite3'),
-		importDynamic('drizzle-orm/better-sqlite3')
-	]);
-	const sqlite = new Database(path, opts.connection);
-	if (opts.pragma) {
-		for (const p of opts.pragma) sqlite.pragma(p);
+	try {
+		const [{ default: Database }, { drizzle }] = await Promise.all([
+			importDynamic('better-sqlite3'),
+			importDynamic('drizzle-orm/better-sqlite3')
+		]);
+		const sqlite = new Database(path, opts.connection);
+		if (opts.pragma) {
+			for (const p of opts.pragma) sqlite.pragma(p);
+		}
+		return drizzle(sqlite, opts.drizzle);
+	} catch (err) {
+		return nodeSqliteFallback(path, opts, err);
 	}
-	return drizzle(sqlite, opts.drizzle);
+}
+
+/**
+ * `node:sqlite` (Node ≥ 22.5) behind drizzle's driver-free `sqlite-proxy`
+ * adapter. `drizzle-orm/better-sqlite3` statically imports the native
+ * addon, so when that addon is missing or fails to load the whole adapter
+ * is off the table — the proxy callback contract (raw value arrays per
+ * row, built here from `columns()` order) is the sanctioned driver-less
+ * path. Exported for the test suite; use `betterSqlite`, which falls back
+ * here on its own.
+ */
+export async function nodeSqliteFallback(path, opts = {}, cause) {
+	let DatabaseSync;
+	try {
+		({ DatabaseSync } = await importDynamic('node:sqlite'));
+	} catch {
+		throw new Error(
+			'no SQLite backend: better-sqlite3 failed to load' +
+				(cause?.message ? ` (${cause.message.split('\n')[0]})` : '') +
+				' and node:sqlite needs Node >= 22.5 — install better-sqlite3, upgrade Node, or run under Bun (bun:sqlite is used automatically)',
+			{ cause }
+		);
+	}
+	const { drizzle } = await importDynamic('drizzle-orm/sqlite-proxy');
+	const db = new DatabaseSync(path);
+	if (opts.pragma) {
+		for (const p of opts.pragma) db.exec('PRAGMA ' + p);
+	}
+	const client = async (query, params, method) => {
+		const stmt = db.prepare(query);
+		if (method === 'run') {
+			const r = stmt.run(...params);
+			return { rows: [], changes: Number(r.changes), lastInsertRowid: r.lastInsertRowid };
+		}
+		const names = () => stmt.columns().map((c) => c.column ?? c.name);
+		if (method === 'get') {
+			const row = stmt.get(...params);
+			return { rows: row === undefined ? undefined : names().map((c) => row[c]) };
+		}
+		const cols = names();
+		return { rows: stmt.all(...params).map((row) => cols.map((c) => row[c])) };
+	};
+	return drizzle(client, opts.drizzle);
 }
 
 /**
@@ -162,7 +212,9 @@ export async function applyMigrations(db, dirs) {
 	]);
 	await db.run(sql.raw('CREATE TABLE IF NOT EXISTS "_norns_migrations" ("name" text PRIMARY KEY)'));
 	const rows = await db.all(sql.raw('SELECT "name" FROM "_norns_migrations"'));
-	const applied = new Set(rows.map((r) => r.name));
+	// Field-less raw queries answer object rows on the native drivers and
+	// value arrays on the sqlite-proxy fallback — accept both.
+	const applied = new Set(rows.map((r) => (Array.isArray(r) ? r[0] : r.name)));
 
 	const byName = (a, b) => a.localeCompare(b);
 	const files = [];

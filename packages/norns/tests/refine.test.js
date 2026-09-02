@@ -35,6 +35,27 @@ describe('refineSpecs', () => {
 		expect(messages(refineSpecs(specs))).toContain('owner "ghost"');
 	});
 
+	// v6 K-42 — the report's finding 02: a cyclic machine silently defaulted
+	// new rows to whatever state sorted first.
+	test('a cyclic status machine without `initial` is INITIAL_AMBIGUOUS', () => {
+		const specs = clone();
+		specs.modules.orders.entities.Order.status = {
+			open: ['done', 'archived'],
+			done: ['open', 'archived'],
+			archived: ['open']
+		};
+		expect(messages(refineSpecs(specs))).toContain('INITIAL_AMBIGUOUS');
+
+		specs.modules.orders.entities.Order.initial = 'open';
+		expect(refineSpecs(specs)).toEqual([]);
+	});
+
+	test('`initial` must name a declared state', () => {
+		const specs = clone();
+		specs.modules.orders.entities.Order.initial = 'ghost';
+		expect(messages(refineSpecs(specs))).toContain('initial: "ghost" is not a declared status state');
+	});
+
 	test('ref fields must resolve; external declared modules are skipped', () => {
 		const specs = clone();
 		specs.modules.orders.entities.Order.fields.customer.ref = 'catalog.Entity.Vendor';

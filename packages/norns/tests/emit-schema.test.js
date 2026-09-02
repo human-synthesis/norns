@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { compile } from '@danielx/civet';
 
-import { emitModuleSchema } from '../src/kernel/emit-schema.js';
+import { emitModuleSchema, initialState } from '../src/kernel/emit-schema.js';
 import { ORDERS } from './kernel-fixtures.js';
 
 describe('emitModuleSchema', () => {
@@ -11,6 +11,25 @@ describe('emitModuleSchema', () => {
 	test('emits to lib/<module>/schema.c', () => {
 		expect(file.path).toBe('lib/orders/schema.c');
 		expect(file.text).toContain('GENERATED');
+	});
+
+	// v6 K-42 — declared or provable, never alphabetical (the report's finding 02:
+	// a cyclic open↔done→archived→open machine defaulted new rows to "archived").
+	test('initialState honours `initial` and refuses ambiguous machines', () => {
+		expect(initialState({ draft: ['sent'], sent: [] })).toBe('draft');
+		const cyclic = { open: ['done', 'archived'], done: ['open', 'archived'], archived: ['open'] };
+		expect(initialState(cyclic, 'open')).toBe('open');
+		expect(() => initialState(cyclic)).toThrow(/INITIAL_AMBIGUOUS/);
+		expect(() => initialState(cyclic, 'ghost')).toThrow(/not a declared status state/);
+
+		const mod = {
+			entities: {
+				Task: { fields: { title: 'text' }, status: cyclic, initial: 'open' }
+			}
+		};
+		expect(emitModuleSchema('tasks', mod).text).toContain(
+			'status: text(\'status\').notNull().default("open")'
+		);
 	});
 
 	test('drizzle table: pk, notNull, nullable optional, status default', () => {

@@ -112,12 +112,27 @@ export function valibotFor(def0) {
 	return VALIBOT[def.type];
 }
 
-/** The state no transition targets; falls back to the (sorted) first. */
-export function initialState(status) {
+/**
+ * The entity's declared `initial` state, else the one state no transition
+ * targets. A machine where neither identifies a single state (cyclic, or
+ * several untargeted states) has no derivable answer — refine reports
+ * INITIAL_AMBIGUOUS before generation, and this throws as a backstop:
+ * an alphabetical default is never meaningfully correct.
+ */
+export function initialState(status, initial) {
+	if (initial !== undefined) {
+		if (!(initial in status)) throw new Error(`initial state "${initial}" is not a declared status state`);
+		return initial;
+	}
 	const states = Object.keys(status).sort();
 	const targeted = new Set(Object.values(status).flat());
 	const sources = states.filter((s) => !targeted.has(s));
-	return sources.length === 1 ? sources[0] : states[0];
+	if (sources.length !== 1) {
+		throw new Error(
+			`INITIAL_AMBIGUOUS: no single untargeted status state (${states.join(', ')}) — declare \`initial\` on the entity`
+		);
+	}
+	return sources[0];
 }
 
 /**
@@ -153,7 +168,7 @@ export function emitModuleSchema(moduleName, moduleSpec, dialect = 'd1') {
 		}
 		if (states.length > 0) {
 			columns.push(
-				`\tstatus: text('status').notNull().default(${JSON.stringify(initialState(entity.status))})`
+				`\tstatus: text('status').notNull().default(${JSON.stringify(initialState(entity.status, entity.initial))})`
 			);
 		}
 

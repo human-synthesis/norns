@@ -305,6 +305,27 @@ export function refineSpecs(specs) {
 							}
 						}
 					}
+					// v6 K-42: the initial state is declared or provable, never
+					// alphabetical — a cyclic machine silently defaulting new rows
+					// to whatever sorts first is a wrong answer, not a fallback.
+					const states = Object.keys(status);
+					if (value.initial !== undefined && !(value.initial in status)) {
+						issues.push({
+							level: 'error',
+							address: at,
+							message: `initial: "${value.initial}" is not a declared status state`
+						});
+					} else if (value.initial === undefined) {
+						const targeted = new Set(Object.values(status).flat());
+						const sources = states.filter((s) => !targeted.has(s));
+						if (sources.length !== 1) {
+							issues.push({
+								level: 'error',
+								address: at,
+								message: `INITIAL_AMBIGUOUS: no single untargeted status state — declare \`initial\` (one of: ${states.sort().join(', ')})`
+							});
+						}
+					}
 				}
 				break;
 			}
