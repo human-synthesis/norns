@@ -165,11 +165,34 @@ describe('generateApp layout output', () => {
 	}
 
 	test('layoutFile renders with and without app.css import', () => {
-		const plain = layoutFile(false);
+		const plain = layoutFile({ modules: {} }, false);
 		expect(plain.path).toBe('routes/+layout.svelte');
 		expect(plain.text).toContain('{@render children()}');
 		expect(plain.text).not.toContain('app.css');
-		expect(layoutFile(true).text).toContain("import '$custom/app.css';");
+		expect(layoutFile({ modules: {} }, true).text).toContain("import '$custom/app.css';");
+	});
+
+	test('layoutFile with static pages is an admin shell with sidebar nav', () => {
+		const specs = {
+			app: { name: 'crm_app' },
+			modules: {
+				deals: {
+					pages: {
+						dealBoard: { route: '/deals' },
+						detail: { route: '/deals/[id]' },
+						leads: { route: '/leads' }
+					}
+				}
+			}
+		};
+		const { text } = layoutFile(specs, false);
+		expect(text).toContain('class="norns-shell"');
+		expect(text).toContain('<div class="norns-brand">Crm app</div>');
+		expect(text).toContain('"href":"/deals","label":"Deal Board"');
+		expect(text).toContain('"href":"/leads","label":"Leads"');
+		expect(text).not.toContain('[id]');
+		expect(text).toContain("aria-current={page.url.pathname === item.href ? 'page' : undefined}");
+		expect(text).toContain('<main class="norns-main">{@render children()}</main>');
 	});
 
 	test('routes/+layout.svelte is written and picks up src/app.css when present', () => {

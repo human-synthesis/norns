@@ -68,6 +68,12 @@ function parseUnitExpr(exprSrc, states) {
 	return withStateLiterals(parseExpr(exprSrc), states ?? new Set());
 }
 
+/** `dealBoard` → `Deal Board`, `leads` → `Leads`. */
+export function humanizeName(name) {
+	const spaced = String(name).replaceAll('_', ' ').replaceAll('-', ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 function whereCall(exprSrc, { entity, ownerField, states }) {
 	const ast = JSON.stringify(parseUnitExpr(exprSrc, states));
 	const owner = ownerField ? `, ownerField: ${JSON.stringify(ownerField)}` : '';
@@ -764,6 +770,8 @@ export function emitModulePages(moduleName, moduleSpec, specs) {
 			);
 		} else {
 			pug.push(`section.norns-page`);
+			const titleFrom = ['index', 'home', 'main', 'page'].includes(name) ? moduleName : name;
+			pug.push(`\th1.norns-page-title ${humanizeName(titleFrom)}`);
 			for (const c of components) {
 				pug.push(`\t${c.tag}(${c.props.join(' ')})`);
 			}
