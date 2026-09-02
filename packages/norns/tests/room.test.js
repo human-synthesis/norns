@@ -169,6 +169,43 @@ describe('Room (R-08)', () => {
 		expect(await res.json()).toEqual({ clients: 0, ticks: 0 });
 	});
 
+	test('presence joins/leaves broadcast debounced { type: presence } frames (R-16)', async () => {
+		const room = new Room({}, {});
+		room.tickMs = 0;
+		room.presenceMs = 5;
+		const frames = [];
+		room.broadcast = (message) => {
+			frames.push(message);
+			return room.clients;
+		};
+
+		await room.fetch(req('/ws'));
+		await room.fetch(req('/ws'));
+		await Bun.sleep(15);
+		// two joins inside one debounce window collapse into one frame
+		expect(frames).toEqual([{ type: 'presence', clients: 2 }]);
+
+		[...room.sockets][0].fire('close');
+		await Bun.sleep(15);
+		expect(frames).toEqual([
+			{ type: 'presence', clients: 2 },
+			{ type: 'presence', clients: 1 }
+		]);
+	});
+
+	test('presence stays silent when presenceMs is 0', async () => {
+		const room = new Room({}, {});
+		room.tickMs = 0;
+		const frames = [];
+		room.broadcast = (message) => {
+			frames.push(message);
+			return room.clients;
+		};
+		await room.fetch(req('/ws'));
+		await Bun.sleep(10);
+		expect(frames).toEqual([]);
+	});
+
 	test('roomStub resolves idFromName through the namespace', () => {
 		const calls = [];
 		const ns = {

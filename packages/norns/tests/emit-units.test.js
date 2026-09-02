@@ -66,6 +66,15 @@ describe('emitModuleQueries', () => {
 		compiles(out);
 	});
 
+	test('filter where-fragments read the user off ctx, never a bare identifier', () => {
+		const spec = structuredClone(ORDERS);
+		spec.queries.mine = { from: 'Order', filter: 'owner', limit: 20 };
+		const out = emitModuleQueries('orders', spec, specs);
+		expect(out.text).toContain('user: ctx.user');
+		expect(out.text).not.toMatch(/[{,] ?user[,}]/);
+		compiles(out);
+	});
+
 	test('cross-module from imports the other module schema', () => {
 		const spec = { module: 'shop', depends: ['catalog'], queries: { products: { from: 'catalog.Entity.Product', limit: 10 } } };
 		const out = emitModuleQueries('shop', spec, specs);

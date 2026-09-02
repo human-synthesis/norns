@@ -5,6 +5,7 @@ import { authHandle } from './handle/auth.js';
 import { errorHandle } from './handle/error.js';
 import { setSerializer } from './route.js';
 import { createEvents, registerTriggers } from './events.js';
+import { createJobs, registerJobs } from './job.js';
 import { createLive } from './live.js';
 import { scheduledHandler, startCronShim } from './cron.js';
 
@@ -44,6 +45,13 @@ export function createApp() {
  *   cron ones are served by the returned `scheduled` handler.
  * - `queue` — Cloudflare Queues producer binding; `emit` enqueues instead of
  *   dispatching in-process.
+ * - `jobs` — generated job tables (`lib/<m>/jobs.c` `jobs` exports), nested
+ *   arrays flattened. Wired to `job:<address>` bus messages with
+ *   retry/backoff/DLQ semantics; a `jobs` facade singleton (enqueue) is
+ *   bound automatically unless a feature bound one.
+ * - `services` — generated service tables (`lib/<m>/services.c` `services`
+ *   exports), flattened; each client is container-registered under its unit
+ *   address so custom bodies can `container.resolve('crm.Service.mailer')`.
  * - `cronShim: true` — local minute-timer for cron triggers (`norns dev`).
  * - `auth` — a better-auth-shaped instance (`.handler(request)` +
  *   `.api.getSession({ headers })`); requests under `authBasePath`
@@ -62,6 +70,8 @@ export function createApp() {
  *   handleError?: import('@sveltejs/kit').HandleServerError,
  *   serializer?: import('./route.js').Serializer | null,
  *   triggers?: *[],
+ *   jobs?: *[],
+ *   services?: *[],
  *   queue?: { send(body: *): Promise<void> | void },
  *   cronShim?: boolean,
  *   room?: *,
@@ -110,6 +120,18 @@ export async function boot(opts = {}) {
 		container.single('live', () =>
 			createLive({ events: container.resolve('events'), room: opts.room })
 		);
+	}
+
+	if (!container.has('jobs')) {
+		container.single('jobs', () => createJobs(container));
+	}
+	const jobTables = (opts.jobs ?? []).flat(Infinity);
+	if (jobTables.length > 0) registerJobs(container, jobTables);
+
+	for (const table of (opts.services ?? []).flat(Infinity)) {
+		for (const [address, client] of Object.entries(table ?? {})) {
+			if (!container.has(address)) container.single(address, () => client);
+		}
 	}
 
 	const triggers = (opts.triggers ?? []).flat(Infinity);

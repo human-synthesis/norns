@@ -151,6 +151,128 @@ const Component = v.strictObject({
 	slots: v.optional(v.array(ident))
 });
 
+// Snippet (U-07) — a typed render fragment for a palette slot (cell
+// renderers, empty states). Declared args are the slot's calling
+// convention; the body lives in `src/<m>/snippets/<name>.n` and the page
+// emitter wraps it in a `+snippet` forwarding the args as props.
+const Snippet = v.strictObject({
+	uid,
+	args: v.optional(v.array(ident)),
+	description: v.optional(v.string())
+});
+
+// Service (D15) — an external system as a typed operation manifest.
+// Credentials never appear here: `auth.binding` is an env binding *name*
+// (UPPER_SNAKE); a literal secret anywhere in a service is refused at
+// generate time (SECRET_IN_SPEC, generate.js).
+const bindingName = v.pipe(
+	v.string(),
+	v.regex(/^[A-Z][A-Z0-9_]*$/, 'must be an UPPER_SNAKE env binding name, never a secret value')
+);
+
+const ServiceAuth = v.pipe(
+	v.strictObject({
+		mode: v.picklist(['none', 'bearer', 'basic', 'hmac', 'header']),
+		binding: v.optional(bindingName),
+		header: v.optional(v.pipe(v.string(), v.regex(/^[A-Za-z][A-Za-z0-9-]*$/, 'must be a header name')))
+	}),
+	v.check(
+		(a) => (a.mode === 'none' ? a.binding === undefined : a.binding !== undefined),
+		"auth modes other than 'none' require a `binding` name; 'none' must not have one"
+	),
+	v.check((a) => a.mode === 'header' || a.header === undefined, "`header` is only valid with mode 'header'"),
+	v.check((a) => a.mode !== 'header' || a.header !== undefined, "auth mode 'header' requires `header`")
+);
+
+const ServiceOperation = v.strictObject({
+	method: v.optional(v.picklist(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])),
+	path: v.optional(v.pipe(v.string(), v.regex(/^\//, 'path must start with "/"'))),
+	input: v.optional(v.record(ident, v.union([v.string(), v.record(v.string(), v.unknown())]))),
+	output: v.optional(v.unknown())
+});
+
+const Service = v.strictObject({
+	uid,
+	base: v.pipe(v.string(), v.url('base must be an absolute URL')),
+	auth: ServiceAuth,
+	operations: v.pipe(
+		v.record(ident, ServiceOperation),
+		v.check((ops) => Object.keys(ops).length > 0, 'services require at least one operation')
+	)
+});
+
+// Job (D14/K-22) — durable work. Retry policy is required by guardrail:
+// a job without declared failure behavior is refused at the shape level.
+// Jobs run from `enqueue` steps via the events bus (`job:<address>`
+// messages) — Cloudflare Queues in production, inline in dev.
+const queueName = v.pipe(
+	v.string(),
+	v.regex(/^[a-z][a-z0-9-]*$/, 'must be a queue name (lowercase, digits, dashes)')
+);
+
+const Job = v.pipe(
+	v.strictObject({
+		uid,
+		input: v.optional(v.record(ident, v.union([v.string(), v.record(v.string(), v.unknown())]))),
+		retry: v.strictObject({
+			attempts: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(20)),
+			backoff: v.picklist(['none', 'fixed', 'exponential']),
+			baseMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1)))
+		}),
+		dlq: v.optional(queueName),
+		concurrency: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100))),
+		steps: v.optional(v.array(v.record(v.string(), v.unknown()))),
+		emits: v.optional(v.array(v.string())),
+		examples: v.optional(v.array(example)),
+		impl: v.optional(v.picklist(['generated', 'custom']))
+	}),
+	v.check(requiresExamplesWhenCustom, CUSTOM_NEEDS_EXAMPLES),
+	v.check(
+		(j) => j.impl === 'custom' || (Array.isArray(j.steps) && j.steps.length > 0),
+		'generated jobs need at least one step (or `impl: custom`)'
+	)
+);
+
+// Endpoint (D14/K-23) — a Route grown up: declared route/method/auth and
+// IO contract in spec, body in `src/<m>/endpoints/<name>.c`. `stream`
+// declares an SSE output mode with typed frames (the chat/AI-token path).
+// `auth` is required — public endpoints declare `{ mode: 'none' }` explicitly.
+const Endpoint = v.pipe(
+	v.strictObject({
+		uid,
+		route: v.pipe(v.string(), v.regex(/^\//, 'route must start with "/"')),
+		method: v.optional(v.picklist(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])),
+		auth: ServiceAuth,
+		input: v.optional(v.record(ident, v.union([v.string(), v.record(v.string(), v.unknown())]))),
+		output: v.optional(v.record(ident, v.unknown())),
+		stream: v.optional(
+			v.strictObject({
+				frame: v.pipe(
+					v.record(ident, v.unknown()),
+					v.check((f) => Object.keys(f).length > 0, 'stream frames need at least one field')
+				)
+			})
+		),
+		impl: v.optional(v.literal('custom')),
+		examples: v.optional(v.array(example))
+	}),
+	v.check((e) => !(e.output && e.stream), 'declare either `output` or `stream`, not both'),
+	v.check(requiresExamplesWhenCustom, CUSTOM_NEEDS_EXAMPLES)
+);
+
+// Room contract (D14) — Workers with `room: true` may declare state and
+// message schemas plus script examples: message sequences driven against
+// the Room class headless, checked as expected state + broadcasts (K-25).
+const roomScriptStep = v.strictObject({
+	send: ident,
+	with: v.optional(v.record(v.string(), v.unknown()))
+});
+
+const roomExample = v.strictObject({
+	script: v.pipe(v.array(roomScriptStep), v.minLength(1, 'room examples need at least one script step')),
+	expect: v.optional(v.unknown())
+});
+
 // L3 kinds: whole Civet files with declared auth + capabilities.
 // `validate` refuses them without an auth declaration (PLAN §6).
 const level3 = (extra = {}) =>
@@ -179,8 +301,26 @@ export const UNIT_SCHEMAS = {
 	Trigger,
 	Function,
 	Component,
+	Snippet,
+	Service,
+	Job,
+	Endpoint,
 	Route: level3(),
-	Worker: level3({ room: v.optional(v.boolean()) }),
+	Worker: level3({
+		room: v.optional(v.boolean()),
+		state: v.optional(v.record(ident, v.string())),
+		messages: v.optional(
+			v.record(
+				ident,
+				v.strictObject({
+					in: v.optional(v.record(v.string(), v.unknown())),
+					out: v.optional(v.record(v.string(), v.unknown()))
+				})
+			)
+		),
+		tickMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
+		examples: v.optional(v.array(roomExample))
+	}),
 	Adapter: level3(),
 	Middleware: level3(),
 	Plugin
@@ -201,6 +341,10 @@ export const MODULE_SCHEMA = v.strictObject({
 	triggers: collection,
 	functions: collection,
 	components: collection,
+	snippets: collection,
+	services: collection,
+	jobs: collection,
+	endpoints: collection,
 	routes: collection,
 	workers: collection,
 	adapters: collection,

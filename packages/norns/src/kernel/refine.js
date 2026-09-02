@@ -69,6 +69,54 @@ export function refineSpecs(specs) {
 		}
 	}
 
+	/**
+	 * `call` steps may target a service operation
+	 * (`<module>.Service.<name>.<op>`) — the service and operation must both
+	 * exist. Other call targets are container tokens, resolved at runtime.
+	 */
+	function checkServiceCall(at, fromModule, call) {
+		const m = /^([a-z][a-z0-9_]*)\.Service\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(
+			call
+		);
+		if (!m) return;
+		const [, module, service, op] = m;
+		if (!(module in modules)) {
+			if (dependsOf(fromModule).includes(module)) return;
+			issues.push({
+				level: 'error',
+				address: at,
+				message: `call "${call}" points into unknown module "${module}" (not loaded, not in depends)`
+			});
+			return;
+		}
+		const svc = modules[module]?.services?.[service];
+		if (!svc) {
+			issues.push({
+				level: 'error',
+				address: at,
+				message: `call "${call}" does not resolve (no ${module}.Service.${service})`
+			});
+			return;
+		}
+		if (!svc.operations?.[op]) {
+			issues.push({
+				level: 'error',
+				address: at,
+				message: `call "${call}": service "${service}" has no operation "${op}"`
+			});
+		}
+	}
+
+	/** Shared step checks for Actions and Jobs: service calls and job enqueues resolve. */
+	function checkFlowSteps(at, fromModule, unitValue) {
+		for (const step of Array.isArray(unitValue?.steps) ? unitValue.steps : []) {
+			if (typeof step?.call === 'string') checkServiceCall(at, fromModule, step.call);
+			if (typeof step?.enqueue === 'string') {
+				checkRef(at, fromModule, step.enqueue, 'Job', 'enqueue');
+			}
+		}
+	}
+
 	// depends: modules exist (or are external-by-convention? no — depends
 	// names must be loaded or the well-known platform module "core") and form a DAG.
 	for (const [name, spec] of Object.entries(modules)) {
@@ -144,6 +192,7 @@ export function refineSpecs(specs) {
 				for (const ref of Array.isArray(value?.refresh) ? value.refresh : []) {
 					checkRef(at, mod, ref, 'Query', 'refresh');
 				}
+				checkFlowSteps(at, mod, value);
 				if (value?.transport === 'remote' && !remoteEnabled) {
 					issues.push({
 						level: 'error',
@@ -184,6 +233,35 @@ export function refineSpecs(specs) {
 			case 'Trigger': {
 				const action = typeof value === 'string' ? value : value?.action;
 				checkRef(at, mod, action, 'Action', 'trigger action');
+				break;
+			}
+			case 'Job': {
+				checkFlowSteps(at, mod, value);
+				break;
+			}
+			case 'Worker': {
+				if (value?.messages) {
+					for (const [i, ex] of (value.examples ?? []).entries()) {
+						for (const step of ex.script ?? []) {
+							if (!(step.send in value.messages)) {
+								issues.push({
+									level: 'error',
+									address: at,
+									message: `example ${i}: script sends undeclared message "${step.send}"`
+								});
+							}
+						}
+					}
+				}
+				break;
+			}
+			case 'Route': {
+				issues.push({
+					level: 'warning',
+					address: at,
+					message:
+						'schema-less Route is deprecated — declare an Endpoint (route/method/auth/input/output) instead; v3.1 refuses bare Routes'
+				});
 				break;
 			}
 			case 'Component': {

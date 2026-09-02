@@ -161,4 +161,23 @@ describe('generateApp', () => {
 			done();
 		}
 	});
+
+	test('an app.tron-only change refreshes wrangler.json', () => {
+		const { root, dir, done } = specsDir({ app: APP, blog: { module: 'blog' } });
+		try {
+			generateApp(dir);
+			const wranglerPath = join(root, '.norns', 'generated', 'wrangler.json');
+			expect(JSON.parse(readFileSync(wranglerPath, 'utf-8')).name).toBe('demo');
+
+			writeSpec(join(dir, 'app.tron'), { ...APP, name: 'renamed' });
+			const run = generateApp(dir);
+			expect(run.skipped).toEqual(['blog']);
+			expect(run.written).toContain('wrangler.json');
+			expect(JSON.parse(readFileSync(wranglerPath, 'utf-8')).name).toBe('renamed');
+
+			expect(generateApp(dir).written).toEqual([]);
+		} finally {
+			done();
+		}
+	});
 });

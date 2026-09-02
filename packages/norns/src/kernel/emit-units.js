@@ -71,7 +71,7 @@ function parseUnitExpr(exprSrc, states) {
 function whereCall(exprSrc, { entity, ownerField, states }) {
 	const ast = JSON.stringify(parseUnitExpr(exprSrc, states));
 	const owner = ownerField ? `, ownerField: ${JSON.stringify(ownerField)}` : '';
-	return `compileWhere(${ast}, { table: ${entity}, ops, user${owner} })`;
+	return `compileWhere(${ast}, { table: ${entity}, ops, user: ctx.user${owner} })`;
 }
 
 function guardExpr(exprSrc, ownerField, states) {
@@ -256,6 +256,42 @@ function inputSchema(moduleName, action, specs) {
 	return `v.strictObject({ ${fields.join(', ')} })`;
 }
 
+const SERVICE_CALL_RE = /^([a-z][a-z0-9_]*)\.Service\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/;
+const SCOPE_PATH_RE = /^(row|input|user)(\.[A-Za-z_$][A-Za-z0-9_$]*)*$/;
+
+/** `with:` values are scope paths (`input.id`) or JSON literals; no `with` passes the action input through. */
+function withArg(withMap) {
+	if (!withMap || typeof withMap !== 'object') return 'input';
+	const entries = Object.keys(withMap)
+		.sort()
+		.map((k) => {
+			const val = withMap[k];
+			const isPath = typeof val === 'string' && SCOPE_PATH_RE.test(val);
+			return `${k}: ${isPath ? val : JSON.stringify(val)}`;
+		});
+	return `{ ${entries.join(', ')} }`;
+}
+
+/** A `call` step: service operations go through the generated typed client; anything else resolves a container token. */
+function callStep(step, moduleName, serviceImports, ctx) {
+	const m = SERVICE_CALL_RE.exec(step.call);
+	if (m) {
+		const [, module, service, op] = m;
+		const local = module === moduleName ? './' : `../${module}/`;
+		serviceImports.set(service, `${local}services.c`);
+		return `\t\tawait ${service}.${op}(${withArg(step.with)}, container)`;
+	}
+	return `\t\tawait container.resolve(${JSON.stringify(step.call)})(${ctx})`;
+}
+
+const JOB_ADDR_RE = /^[a-z][a-z0-9_]*\.Job\.[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** An `enqueue` step hands the input to the `jobs` facade (R-14): Queues in prod, inline in dev. */
+function enqueueStep(step, moduleName) {
+	const addr = JOB_ADDR_RE.test(step.enqueue) ? step.enqueue : `${moduleName}.Job.${step.enqueue}`;
+	return `\t\tawait container.resolve('jobs').enqueue(${JSON.stringify(addr)}, ${withArg(step.with)}, user)`;
+}
+
 export function emitModuleActions(moduleName, moduleSpec, specs) {
 	const actions = moduleSpec.actions ?? {};
 	const names = Object.keys(actions).sort();
@@ -263,6 +299,7 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 
 	const entityImports = new Map();
 	const policyImports = new Map();
+	const serviceImports = new Map();
 	const customImports = [];
 	const fns = [];
 
@@ -328,7 +365,9 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 						`\t\tawait container.resolve('events').emit(${JSON.stringify(step.emit)}, { row, input, user })`
 					);
 				} else if (step.call) {
-					body.push(`\t\tawait container.resolve(${JSON.stringify(step.call)})({ row, input, user })`);
+					body.push(callStep(step, moduleName, serviceImports, '{ row, input, user }'));
+				} else if (step.enqueue) {
+					body.push(enqueueStep(step, moduleName));
 				}
 			}
 			for (const evt of custom ? [] : (action.emits ?? [])) {
@@ -338,6 +377,25 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 			}
 		} else if (custom) {
 			body.push(`\t\treturn ${name}Body({ input, container, user })`);
+		} else {
+			// No entity target: pure flow actions (integrations, notifications)
+			// still run their emit/call steps.
+			for (const step of action.steps ?? []) {
+				if (step.emit) {
+					body.push(
+						`\t\tawait container.resolve('events').emit(${JSON.stringify(step.emit)}, { input, user })`
+					);
+				} else if (step.call) {
+					body.push(callStep(step, moduleName, serviceImports, '{ input, user }'));
+				} else if (step.enqueue) {
+					body.push(enqueueStep(step, moduleName));
+				}
+			}
+			for (const evt of action.emits ?? []) {
+				body.push(
+					`\t\tawait container.resolve('events').emit(${JSON.stringify(evt)}, { input, user })`
+				);
+			}
 		}
 		if (custom) {
 			customImports.push(`import ${name}Body from '$custom/${moduleName}/actions/${name}.c'`);
@@ -360,9 +418,116 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 	for (const [file, names_] of groupImports(policyImports)) {
 		lines.push(`import { ${names_.join(', ')} } from '${file}'`);
 	}
+	for (const [file, names_] of groupImports(serviceImports)) {
+		lines.push(`import { ${names_.join(', ')} } from '${file}'`);
+	}
 	lines.push(...customImports);
 	lines.push('', fns.join('\n\n'), '');
 	return { path: `lib/${moduleName}/actions.c`, text: lines.join('\n') };
+}
+
+/* ------------------------------------------------------------------ */
+/* Services → lib/<module>/services.c                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Service manifests (D15) become typed clients. Credentials resolve at call
+ * time from the env the container carries — never from the spec. `services`
+ * maps unit addresses to clients so boot can container-register them (R-14).
+ */
+export function emitModuleServices(moduleName, moduleSpec) {
+	const services = moduleSpec.services ?? {};
+	const names = Object.keys(services).sort();
+	if (names.length === 0) return null;
+
+	const lines = [header(moduleName), '', `import { serviceClient } from '@human-synthesis/norns/server'`, ''];
+	const entries = [];
+	for (const name of names) {
+		const svc = services[name];
+		const operations = {};
+		for (const op of Object.keys(svc.operations ?? {}).sort()) {
+			const o = svc.operations[op];
+			operations[op] = {
+				method: o.method ?? 'POST',
+				path: o.path ?? `/${op}`,
+				...(o.input !== undefined ? { input: o.input } : {}),
+				...(o.output !== undefined ? { output: o.output } : {})
+			};
+		}
+		const def = {
+			name: `${moduleName}.Service.${name}`,
+			base: svc.base,
+			auth: svc.auth,
+			operations
+		};
+		lines.push(`export ${name} := serviceClient(${JSON.stringify(def, null, '\t')})`, '');
+		entries.push(`\t${JSON.stringify(`${moduleName}.Service.${name}`)}: ${name}`);
+	}
+	lines.push(`export services := {`, entries.join(',\n'), `}`, '');
+	return { path: `lib/${moduleName}/services.c`, text: lines.join('\n') };
+}
+
+/* ------------------------------------------------------------------ */
+/* Jobs → lib/<module>/jobs.c                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Jobs (K-22) become `job({...})` units carrying their retry/dlq contract;
+ * `registerJobs` (R-14) wires them to `job:<address>` bus messages with
+ * retry/backoff/DLQ semantics — Cloudflare Queues in prod, inline in dev.
+ */
+export function emitModuleJobs(moduleName, moduleSpec) {
+	const jobs = moduleSpec.jobs ?? {};
+	const names = Object.keys(jobs).sort();
+	if (names.length === 0) return null;
+
+	const serviceImports = new Map();
+	const customImports = [];
+	const fns = [];
+	const entries = [];
+
+	for (const name of names) {
+		const j = jobs[name];
+		const custom = j.impl === 'custom';
+		const address = `${moduleName}.Job.${name}`;
+		const body = [];
+		if (custom) {
+			customImports.push(`import ${name}Body from '$custom/${moduleName}/jobs/${name}.c'`);
+			body.push(`\t\treturn ${name}Body({ input, container, user })`);
+		} else {
+			for (const step of j.steps ?? []) {
+				if (step.emit) {
+					body.push(
+						`\t\tawait container.resolve('events').emit(${JSON.stringify(step.emit)}, { input, user })`
+					);
+				} else if (step.call) {
+					body.push(callStep(step, moduleName, serviceImports, '{ input, user }'));
+				} else if (step.enqueue) {
+					body.push(enqueueStep(step, moduleName));
+				}
+			}
+			for (const evt of j.emits ?? []) {
+				body.push(
+					`\t\tawait container.resolve('events').emit(${JSON.stringify(evt)}, { input, user })`
+				);
+			}
+		}
+		const props = [`\taddress: ${JSON.stringify(address)}`, `\tretry: ${JSON.stringify(j.retry)}`];
+		if (j.dlq) props.push(`\tdlq: ${JSON.stringify(j.dlq)}`);
+		if (j.concurrency) props.push(`\tconcurrency: ${j.concurrency}`);
+		props.push([`\trun: async ({ input, container, user }) => {`, ...body, `\t}`].join('\n'));
+		fns.push([`export ${name} := job({`, props.join(',\n'), `})`].join('\n'));
+		entries.push(`\t${JSON.stringify(address)}: ${name}`);
+	}
+
+	const lines = [header(moduleName), '', `import { job } from '@human-synthesis/norns/server'`, ''];
+	for (const [file, names_] of groupImports(serviceImports)) {
+		lines.push(`import { ${names_.join(', ')} } from '${file}'`);
+	}
+	lines.push(...customImports);
+	lines.push('', fns.join('\n\n'), '');
+	lines.push(`export jobs := {`, entries.join(',\n'), `}`, '');
+	return { path: `lib/${moduleName}/jobs.c`, text: lines.join('\n') };
 }
 
 /* ------------------------------------------------------------------ */
@@ -439,20 +604,69 @@ function routeSegments(route) {
 		.map((seg) => (seg.startsWith(':') ? `[${seg.slice(1)}]` : seg));
 }
 
+/** '/api/chat' from a `stream:` Endpoint address (falls back to the address). */
+function endpointRoute(specs, address) {
+	const parsed = isAddress(address) ? parseAddress(address) : null;
+	return specs?.modules?.[parsed?.module]?.endpoints?.[parsed?.name]?.route ?? address;
+}
+
+/**
+ * The tag key of a page component entry. Authors write the tag first, but
+ * TRON canonicalization sorts record keys on write, so the primary must be
+ * recovered semantically: a realtime object binding ({stream}/{room}) wins,
+ * else a Query address, else an Action address (the form target), else the
+ * first key in record order.
+ */
+export function componentKey(entry) {
+	const keys = Object.keys(entry ?? {});
+	let query = null;
+	let action = null;
+	for (const key of keys) {
+		const value = entry[key];
+		if (value && typeof value === 'object' && !Array.isArray(value)) {
+			if (typeof value.stream === 'string' || typeof value.room === 'string') return key;
+			continue;
+		}
+		if (typeof value !== 'string' || !isAddress(value)) continue;
+		const { kind } = parseAddress(value);
+		if (kind === 'Query') query ??= key;
+		else if (kind === 'Action') action ??= key;
+	}
+	return query ?? action ?? keys[0] ?? null;
+}
+
 /** Collect { queries, actions, components } bound by a page spec. */
-function pageBindings(pageSpec) {
+function pageBindings(pageSpec, specs) {
 	const queries = new Map();
 	const actions = new Map();
+	const snippets = new Map();
 	const components = [];
 	for (const entry of pageSpec.components ?? []) {
 		const keys = Object.keys(entry);
 		if (keys.length === 0) continue;
-		const [first, ...rest] = keys;
+		const first = componentKey(entry);
 		const component = { tag: pascal(first), props: [] };
 		for (const key of keys) {
 			const value = entry[key];
+			if (key === first && value && typeof value === 'object' && !Array.isArray(value)) {
+				// realtime bindings (K-27): the component connects itself via
+				// streamSource(url) / roomChannel(name) from norns/live-client
+				if (typeof value.stream === 'string') {
+					component.props.push(`streamSource=${JSON.stringify(endpointRoute(specs, value.stream))}`);
+				}
+				if (typeof value.room === 'string') {
+					component.props.push(`roomChannel=${JSON.stringify(value.room)}`);
+				}
+				continue;
+			}
 			const parsed = typeof value === 'string' && isAddress(value) ? parseAddress(value) : null;
-			if (parsed?.kind === 'Query') {
+			if (parsed?.kind === 'Snippet') {
+				// U-07: the page wraps the custom body in a `+snippet` forwarding
+				// the declared args as props, and binds that snippet to the slot
+				const unit = specs?.modules?.[parsed.module]?.snippets?.[parsed.name];
+				snippets.set(parsed.name, { module: parsed.module, args: unit?.args ?? [] });
+				component.props.push(`${key}!="{${parsed.name}}"`);
+			} else if (parsed?.kind === 'Query') {
 				queries.set(parsed.name, parsed.module);
 				component.props.push(
 					key === first
@@ -472,7 +686,7 @@ function pageBindings(pageSpec) {
 		}
 		components.push(component);
 	}
-	return { queries, actions, components };
+	return { queries, actions, snippets, components };
 }
 
 export function emitModulePages(moduleName, moduleSpec, specs) {
@@ -485,7 +699,7 @@ export function emitModulePages(moduleName, moduleSpec, specs) {
 		const segments = routeSegments(spec.route);
 		const dir = ['routes', ...segments].join('/');
 		const lib = up(segments.length + 1) + 'lib';
-		const { queries, actions, components } = pageBindings(spec);
+		const { queries, actions, snippets, components } = pageBindings(spec, specs);
 		// Queries marked `live: true` get a depends key in the load and an
 		// EventSource subscription in the page, so refresh signals from
 		// /_norns/live re-run the load (R-11).
@@ -553,9 +767,18 @@ export function emitModulePages(moduleName, moduleSpec, specs) {
 			for (const c of components) {
 				pug.push(`\t${c.tag}(${c.props.join(' ')})`);
 			}
+			for (const [sname, s] of [...snippets].sort(([a], [b]) => a.localeCompare(b))) {
+				pug.push('', `+snippet('${sname}'${s.args.length ? `, ${s.args.join(', ')}` : ''})`);
+				pug.push(
+					`\t${pascal(sname)}${s.args.length ? `(${s.args.map((a) => `${a}!="{${a}}"`).join(' ')})` : ''}`
+				);
+			}
 			const stateKeys = Object.keys(spec.state ?? {}).sort();
 			pug.push('', '<script>');
 			if (liveScript) pug.push(...liveScript.imports);
+			for (const [sname, s] of [...snippets].sort(([a], [b]) => a.localeCompare(b))) {
+				pug.push(`\timport ${pascal(sname)} from '$custom/${s.module}/snippets/${sname}.n'`);
+			}
 			pug.push(`\t{ data, form } := $props()`);
 			for (const key of stateKeys) pug.push(`\t${key} := $state(null)`);
 			if (liveScript) pug.push(liveScript.effect);
@@ -564,6 +787,45 @@ export function emitModulePages(moduleName, moduleSpec, specs) {
 		files.push({ path: `${dir}/+page.n`, text: pug.join('\n') });
 	}
 	return files;
+}
+
+/* ------------------------------------------------------------------ */
+/* Endpoints → routes<route>/+server.c (D14/K-23)                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Each Endpoint becomes a `+server.c` shell at its declared route: the
+ * `endpoint()` runtime verifies auth, validates input, runs the custom
+ * body from `src/<m>/endpoints/<name>.c`, then validates output — or, in
+ * `stream` mode, serves the body's yielded frames as typed SSE.
+ */
+export function emitModuleEndpoints(moduleName, moduleSpec) {
+	const endpoints = moduleSpec.endpoints ?? {};
+	const names = Object.keys(endpoints).sort();
+	if (names.length === 0) return null;
+
+	return names.map((name) => {
+		const spec = endpoints[name];
+		const def = { name: `${moduleName}.Endpoint.${name}`, auth: spec.auth };
+		if (spec.input !== undefined) def.input = spec.input;
+		if (spec.output !== undefined) def.output = spec.output;
+		if (spec.stream !== undefined) def.stream = spec.stream;
+		const defJson = JSON.stringify(def, null, '\t');
+		const withBody = defJson.slice(0, defJson.lastIndexOf('}')).trimEnd() + `,\n\tbody: ${name}Body\n}`;
+		return {
+			path: ['routes', ...routeSegments(spec.route), '+server.c'].join('/'),
+			text: [
+				header(moduleName),
+				'',
+				`import { endpoint } from '@human-synthesis/norns/server'`,
+				'',
+				`import ${name}Body from '$custom/${moduleName}/endpoints/${name}.c'`,
+				'',
+				`export ${spec.method ?? 'POST'} := endpoint(${withBody})`,
+				''
+			].join('\n')
+		};
+	});
 }
 
 /* ------------------------------------------------------------------ */
@@ -576,6 +838,8 @@ const single = (fn) => ({ moduleName, moduleSpec, specs }) => {
 export const policiesEmitter = { name: 'policies', emit: single(emitModulePolicies) };
 export const queriesEmitter = { name: 'queries', emit: single(emitModuleQueries) };
 export const actionsEmitter = { name: 'actions', emit: single(emitModuleActions) };
+export const servicesEmitter = { name: 'services', emit: single(emitModuleServices) };
+export const jobsEmitter = { name: 'jobs', emit: single(emitModuleJobs) };
 export const triggersEmitter = { name: 'triggers', emit: single(emitModuleTriggers) };
 export const pagesEmitter = {
 	name: 'pages',
@@ -584,4 +848,8 @@ export const pagesEmitter = {
 export const remotesEmitter = {
 	name: 'remotes',
 	emit: ({ moduleName, moduleSpec }) => emitModuleRemotes(moduleName, moduleSpec) ?? []
+};
+export const endpointsEmitter = {
+	name: 'endpoints',
+	emit: ({ moduleName, moduleSpec }) => emitModuleEndpoints(moduleName, moduleSpec) ?? []
 };

@@ -41,6 +41,17 @@ function needsRoom(specs) {
 	return false;
 }
 
+/** Jobs share the app events queue in v3-A; the strictest job wins the consumer settings. */
+function jobUnits(specs) {
+	const out = [];
+	for (const mod of Object.values(specs.modules)) {
+		for (const j of Object.values(mod.jobs ?? {})) {
+			if (j && typeof j === 'object') out.push(j);
+		}
+	}
+	return out;
+}
+
 function cronSchedules(specs) {
 	const crons = new Set();
 	for (const mod of Object.values(specs.modules)) {
@@ -85,11 +96,20 @@ export function wranglerConfig(specs) {
 		config.r2_buckets = [{ binding: 'STORAGE', bucket_name: `${name}-storage` }];
 	}
 
-	if (cf.queue === true) {
+	const jobs = jobUnits(specs);
+	if (cf.queue === true || jobs.length > 0) {
 		const queue = `${name}-events`;
+		const consumer = { queue };
+		if (jobs.length > 0) {
+			consumer.max_retries = Math.max(...jobs.map((j) => j.retry?.attempts ?? 1));
+			const dlqs = [...new Set(jobs.map((j) => j.dlq).filter(Boolean))].sort();
+			if (dlqs.length > 0) consumer.dead_letter_queue = dlqs[0];
+			const conc = jobs.map((j) => j.concurrency).filter(Boolean);
+			if (conc.length > 0) consumer.max_concurrency = Math.min(...conc);
+		}
 		config.queues = {
 			producers: [{ binding: 'EVENTS', queue }],
-			consumers: [{ queue }]
+			consumers: [consumer]
 		};
 	}
 

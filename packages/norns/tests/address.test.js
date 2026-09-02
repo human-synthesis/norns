@@ -33,7 +33,7 @@ const ORDERS = {
 
 describe('kinds', () => {
 	test('every kind has a collection key and the maps invert each other', () => {
-		expect(KINDS.length).toBe(13);
+		expect(KINDS.length).toBe(17);
 		for (const kind of KINDS) expect(KEY_KINDS[KIND_KEYS[kind]]).toBe(kind);
 	});
 });

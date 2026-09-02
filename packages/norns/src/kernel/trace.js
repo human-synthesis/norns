@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { actionEntity } from './emit-units.js';
+import { shapeIssues } from '../server/service.js';
 import { normalizeField } from './emit-schema.js';
 import { generateApp } from './generate.js';
 import { loadSpecs } from './validate.js';
@@ -53,27 +54,32 @@ function rewriteImports(js, { scratch, appRoot, compileCivet }) {
 			return `${from}${q}${pathToFileURL(target).href}${q}`;
 		}
 		if (spec.startsWith('$custom/')) {
-			const rel = spec.slice('$custom/'.length);
-			const target = join(scratch, 'custom', rel.replace(/\.c$/, '.js'));
-			if (!existsSync(target)) {
-				const src = join(appRoot, 'src', rel);
-				mkdirSync(dirname(target), { recursive: true });
-				if (existsSync(src)) {
-					writeFileSync(
-						target,
-						rewriteImports(compileCivet(readFileSync(src, 'utf-8')), { scratch, appRoot, compileCivet })
-					);
-				} else {
-					writeFileSync(
-						target,
-						`export default () => { throw new Error(${JSON.stringify(`missing custom body: src/${rel}`)}) }\n`
-					);
-				}
-			}
+			const target = ensureCustom(spec.slice('$custom/'.length), { scratch, appRoot, compileCivet });
 			return `${from}${q}${pathToFileURL(target).href}${q}`;
 		}
 		return `${from}${q}${resolveBare(spec)}${q}`;
 	});
+}
+
+/** Compile a custom body `src/<rel>` into the scratch tree; missing bodies throw when invoked. */
+function ensureCustom(rel, { scratch, appRoot, compileCivet }) {
+	const target = join(scratch, 'custom', rel.replace(/\.c$/, '.js'));
+	if (!existsSync(target)) {
+		const src = join(appRoot, 'src', rel);
+		mkdirSync(dirname(target), { recursive: true });
+		if (existsSync(src)) {
+			writeFileSync(
+				target,
+				rewriteImports(compileCivet(readFileSync(src, 'utf-8')), { scratch, appRoot, compileCivet })
+			);
+		} else {
+			writeFileSync(
+				target,
+				`export default () => { throw new Error(${JSON.stringify(`missing custom body: src/${rel}`)}) }\n`
+			);
+		}
+	}
+	return target;
 }
 
 /** Compile `lib/**` of the generated tree into `<scratch>/lib` as JS. */
@@ -166,7 +172,7 @@ function seedRow(id, entitySpec) {
 /* Runner                                                              */
 /* ------------------------------------------------------------------ */
 
-function recordingContainer(db, { fixtures = {}, events, calls }) {
+function recordingContainer(db, { fixtures = {}, auto = {}, events, calls }) {
 	return {
 		resolve(name) {
 			if (name === 'db') return db;
@@ -177,18 +183,84 @@ function recordingContainer(db, { fixtures = {}, events, calls }) {
 					}
 				};
 			}
+			if (name === 'jobs') {
+				return {
+					enqueue: async (address, input) => {
+						calls.push({ name: 'jobs.enqueue', args: [address, input] });
+					}
+				};
+			}
 			if (name in fixtures) return fixtures[name];
+			if (name in auto) {
+				return async (...args) => {
+					calls.push({ name, args });
+					return auto[name];
+				};
+			}
 			return async (...args) => {
 				calls.push({ name, args });
 			};
-		}
+		},
+		// `has` makes serviceClient's op-level fixture hook fire for every
+		// declared service operation — traced flows never touch the network.
+		has: (name) => name in fixtures || name in auto
 	};
+}
+
+/** Service op address → response fabricated from the op's declared output shape. */
+function serviceAutoFixtures(specs) {
+	const auto = {};
+	for (const [moduleName, moduleSpec] of Object.entries(specs.modules)) {
+		for (const [serviceName, svc] of Object.entries(moduleSpec.services ?? {})) {
+			for (const [opName, op] of Object.entries(svc.operations ?? {})) {
+				const out = {};
+				for (const [key, t] of Object.entries(op.output && typeof op.output === 'object' ? op.output : {})) {
+					const type = (typeof t === 'string' ? t : (t?.type ?? 'json')).replace(/\?$/, '');
+					out[key] = SEED_VALUES[type] ?? 'trace';
+				}
+				auto[`${moduleName}.Service.${serviceName}.${opName}`] = out;
+			}
+		}
+	}
+	return auto;
 }
 
 const looseEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+function matchCalls(calls, want) {
+	return (Array.isArray(want) ? want : []).every((w) => {
+		const name = typeof w === 'string' ? w : w?.name;
+		return (calls ?? []).some(
+			(c) => c.name === name && (typeof w === 'string' || w.with === undefined || looseEq(c.args[0], w.with))
+		);
+	});
+}
+
 /**
- * Run every Action example in the app's specs.
+ * `expect` semantics shared by every traced kind: plain keys check the
+ * entity row then the return value; `calls` checks recorded external
+ * calls (by name, optionally `with` args); `frames` the collected SSE
+ * frames; `state`/`broadcasts` the Room script outcome.
+ */
+function checkExpect(record) {
+	record.pass = Object.entries(record.expect).every(([key, want]) => {
+		if (key === 'calls') return matchCalls(record.calls, want);
+		if (key === 'frames') return looseEq(record.frames, want);
+		if (key === 'state') {
+			return Object.entries(want ?? {}).every(([field, v2]) => looseEq(record.state?.[field], v2));
+		}
+		if (key === 'broadcasts') {
+			return (Array.isArray(want) ? want : []).every((n) => (record.broadcasts ?? []).some((b) => b?.type === n));
+		}
+		return looseEq(record.row?.[key], want) || looseEq(record.result?.[key], want);
+	});
+}
+
+/**
+ * Run every example in the app's specs: Actions against the sandbox DB,
+ * plus L3 units (K-25) — Jobs and custom Functions/Endpoints run with the
+ * same recording container (Service calls auto-fixtured from their output
+ * schemas), Room workers run their script examples headless.
  *
  * @param {string} [dir] specs directory, defaults to `<cwd>/specs`
  * @param {{ out?: string, fixtures?: Record<string, *>, user?: * }} [opts]
@@ -210,6 +282,27 @@ export async function traceApp(dir, opts = {}) {
 		const ddl = await tableDDL(Object.values(tables));
 		const { betterSqlite } = await import('../server/db.js');
 		const { sql, eq } = await import('drizzle-orm');
+		const { compile } = require('@danielx/civet');
+		const ctxc = { scratch, appRoot, compileCivet: (src) => compile(src, { sync: true, js: true }) };
+		const auto = serviceAutoFixtures(specs);
+
+		const runL3 = async (address, index, example, invoke) => {
+			const events = [];
+			const calls = [];
+			const record = { address, index, input: example.input ?? {}, expect: example.expect ?? {}, events, calls };
+			try {
+				const db = await betterSqlite(':memory:');
+				for (const stmt of ddl) await db.run(sql.raw(stmt));
+				const container = recordingContainer(db, { fixtures: opts.fixtures, auto, events, calls });
+				record.result = await invoke({ input: record.input, container, user, event: null });
+				checkExpect(record);
+			} catch (e) {
+				record.pass = false;
+				record.error = e?.body?.message ?? e?.message ?? String(e);
+				record.status = e?.status;
+			}
+			return record;
+		};
 
 		for (const [moduleName, moduleSpec] of Object.entries(specs.modules)) {
 			const actionsFile = join(scratch, 'lib', moduleName, 'actions.js');
@@ -217,10 +310,10 @@ export async function traceApp(dir, opts = {}) {
 				.filter(([, a]) => (a.examples ?? []).length > 0)
 				.map(([n]) => n)
 				.sort();
-			if (actionNames.length === 0 || !existsSync(actionsFile)) continue;
-			const mod = await import(pathToFileURL(actionsFile).href);
+			const mod =
+				actionNames.length > 0 && existsSync(actionsFile) ? await import(pathToFileURL(actionsFile).href) : null;
 
-			for (const name of actionNames) {
+			for (const name of mod ? actionNames : []) {
 				const actionSpec = moduleSpec.actions[name];
 				const address = `${moduleName}.Action.${name}`;
 				const target = actionEntity(moduleName, actionSpec, specs);
@@ -248,7 +341,7 @@ export async function traceApp(dir, opts = {}) {
 							if (ref?.endsWith('.id')) seededId = { table, value };
 						}
 
-						const container = recordingContainer(db, { fixtures: opts.fixtures, events, calls });
+						const container = recordingContainer(db, { fixtures: opts.fixtures, auto, events, calls });
 						record.result = await mod[name].run({ input: example.input ?? {}, container, user });
 
 						if (seededId && target) {
@@ -257,13 +350,108 @@ export async function traceApp(dir, opts = {}) {
 							)[0];
 						}
 
-						record.pass = Object.entries(record.expect).every(
-							([k, want]) => looseEq(record.row?.[k], want) || looseEq(record.result?.[k], want)
-						);
+						checkExpect(record);
 					} catch (e) {
 						record.pass = false;
 						record.error = e?.body?.message ?? e?.message ?? String(e);
 						record.status = e?.status;
+					}
+				}
+			}
+
+			// Jobs — run the generated (or custom) `run` inline (K-25)
+			const jobsFile = join(scratch, 'lib', moduleName, 'jobs.js');
+			const jobNames = Object.entries(moduleSpec.jobs ?? {})
+				.filter(([, j]) => (j.examples ?? []).length > 0)
+				.map(([n]) => n)
+				.sort();
+			if (jobNames.length > 0 && existsSync(jobsFile)) {
+				const jobsMod = await import(pathToFileURL(jobsFile).href);
+				for (const name of jobNames) {
+					for (const [index, example] of moduleSpec.jobs[name].examples.entries()) {
+						cases.push(
+							await runL3(`${moduleName}.Job.${name}`, index, example, (ctx) => jobsMod[name].run(ctx))
+						);
+					}
+				}
+			}
+
+			// Functions — custom bodies with contract examples
+			for (const name of Object.keys(moduleSpec.functions ?? {}).sort()) {
+				const fnSpec = moduleSpec.functions[name];
+				if ((fnSpec.examples ?? []).length === 0) continue;
+				const target = ensureCustom(`${moduleName}/functions/${name}.c`, ctxc);
+				const body = (await import(pathToFileURL(target).href)).default;
+				for (const [index, example] of fnSpec.examples.entries()) {
+					cases.push(await runL3(`${moduleName}.Function.${name}`, index, example, (ctx) => body(ctx)));
+				}
+			}
+
+			// Endpoints — body-level trace with the declared IO contract enforced
+			for (const name of Object.keys(moduleSpec.endpoints ?? {}).sort()) {
+				const ep = moduleSpec.endpoints[name];
+				if ((ep.examples ?? []).length === 0) continue;
+				const target = ensureCustom(`${moduleName}/endpoints/${name}.c`, ctxc);
+				const body = (await import(pathToFileURL(target).href)).default;
+				for (const [index, example] of ep.examples.entries()) {
+					const record = await runL3(`${moduleName}.Endpoint.${name}`, index, example, async (ctx) => {
+						let result = body(ctx);
+						if (ep.stream) {
+							if (!result?.[Symbol.asyncIterator]) result = await result;
+							const frames = [];
+							for await (const frame of result) {
+								const issues = shapeIssues(ep.stream.frame ?? {}, frame, 'frame');
+								if (issues.length > 0) throw new Error(issues.join('; '));
+								frames.push(frame);
+							}
+							return frames;
+						}
+						result = await result;
+						if (ep.output) {
+							const issues = shapeIssues(ep.output, result, 'output');
+							if (issues.length > 0) throw new Error(`output contract: ${issues.join('; ')}`);
+						}
+						return result;
+					});
+					if (ep.stream && Array.isArray(record.result)) {
+						record.frames = record.result;
+						checkExpect(record);
+					}
+					cases.push(record);
+				}
+			}
+
+			// Room workers — script examples driven headless against the class
+			for (const name of Object.keys(moduleSpec.workers ?? {}).sort()) {
+				const w = moduleSpec.workers[name];
+				if (w?.room !== true || (w.examples ?? []).length === 0) continue;
+				const rel = w.source.startsWith('src/') ? w.source.slice(4) : w.source;
+				const target = ensureCustom(rel, ctxc);
+				const RoomClass = (await import(pathToFileURL(target).href)).default;
+				for (const [index, example] of w.examples.entries()) {
+					const record = {
+						address: `${moduleName}.Worker.${name}`,
+						index,
+						script: example.script ?? [],
+						expect: example.expect ?? {},
+						broadcasts: []
+					};
+					cases.push(record);
+					try {
+						const instance = new RoomClass({}, {});
+						instance.tickMs = 0;
+						instance.broadcast = (message) => {
+							record.broadcasts.push(typeof message === 'string' ? JSON.parse(message) : message);
+							return 0;
+						};
+						for (const step of example.script ?? []) {
+							await instance.onMessage(JSON.stringify({ type: step.send, ...(step.with ?? {}) }), null);
+						}
+						record.state = Object.fromEntries(Object.keys(w.state ?? {}).map((f) => [f, instance[f]]));
+						checkExpect(record);
+					} catch (e) {
+						record.pass = false;
+						record.error = e?.message ?? String(e);
 					}
 				}
 			}

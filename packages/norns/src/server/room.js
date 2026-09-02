@@ -19,6 +19,10 @@
  * (0 disables ticks) / `persistEvery` (persist() every N ticks; also runs
  * once when the last client leaves). Ticks only run while clients are
  * connected.
+ *
+ * Presence (R-16): set `presenceMs > 0` and every join/leave broadcasts
+ * `{ type: 'presence', clients }` — debounced by that window so a
+ * reconnect storm collapses into one frame.
  */
 
 const ENC = new TextEncoder();
@@ -26,6 +30,8 @@ const ENC = new TextEncoder();
 export class Room {
 	tickMs = 1000;
 	persistEvery = 0;
+	presenceMs = 0;
+	#presenceTimer = null;
 
 	constructor(state, env) {
 		this.state = state;
@@ -68,8 +74,18 @@ export class Room {
 		return this.clients;
 	}
 
+	/** Debounced `{ type: 'presence', clients }` broadcast (opt-in via presenceMs). */
+	#presence() {
+		if (this.presenceMs <= 0 || this.#presenceTimer !== null) return;
+		this.#presenceTimer = setTimeout(() => {
+			this.#presenceTimer = null;
+			this.broadcast({ type: 'presence', clients: this.clients });
+		}, this.presenceMs);
+	}
+
 	#join(set, item) {
 		set.add(item);
+		this.#presence();
 		if (this.timer === null && this.tickMs > 0) {
 			this.timer = setInterval(() => this.#tick(), this.tickMs);
 		}
@@ -77,6 +93,7 @@ export class Room {
 
 	#leave(set, item) {
 		if (!set.delete(item)) return;
+		this.#presence();
 		if (this.clients === 0) {
 			if (this.timer !== null) {
 				clearInterval(this.timer);
