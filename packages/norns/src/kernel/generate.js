@@ -690,7 +690,9 @@ export function liveRouteFile() {
  * When the specs declare statically-routed Pages, the layout is an admin
  * shell: sidebar nav (one link per Page, active state via aria-current)
  * around the content. Styled by the `.norns-*` atoms in norns-ui; override
- * through `app.settings.tokens` or `src/app.css`.
+ * through `app.settings.tokens` or `src/app.css`. `app.settings.shell: false`
+ * suppresses the shell entirely (a single-page app gets a sidebar whose only
+ * link is the page it is already on — pure chrome).
  *
  * @param {{ app?: *, modules: Record<string, *> }} specs
  * @param {boolean} hasAppCss
@@ -699,7 +701,8 @@ export function liveRouteFile() {
  */
 export function layoutFile(specs, hasAppCss, hasTokens = false) {
 	const nav = [];
-	for (const [moduleName, spec] of Object.entries(specs?.modules ?? {})) {
+	const shell = specs?.app?.settings?.shell !== false;
+	for (const [moduleName, spec] of Object.entries(shell ? (specs?.modules ?? {}) : {})) {
 		for (const [name, p] of Object.entries(spec?.pages ?? {})) {
 			const route = p?.route;
 			if (typeof route !== 'string' || route.includes('[') || route.includes(':')) continue;

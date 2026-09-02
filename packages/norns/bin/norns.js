@@ -100,6 +100,16 @@ function findViteBin(root) {
 	return join(dirname(pkgPath), binEntry);
 }
 
+// `bun run dev` reaches this file through the .bin shim, whose
+// `#!/usr/bin/env node` shebang wins — process.execPath is then Node even
+// though the user invoked Bun, and the vite child silently loses Bun-only
+// paths (e.g. bun:sqlite in the db driver). The invoking package manager is
+// still visible in npm_config_user_agent, so honor it.
+function runtimeExec() {
+	if (!process.versions.bun && /^bun\//.test(process.env.npm_config_user_agent ?? '')) return 'bun';
+	return process.execPath;
+}
+
 /**
  * Spec-first regeneration hook. Returns null when the app has no `specs/`
  * dir; otherwise a closure that (re)generates `.norns/generated/` and
@@ -160,7 +170,7 @@ async function devCommand(passthrough) {
 	let pendingRestart = false;
 
 	function spawnVite() {
-		child = spawn(process.execPath, [viteBin, 'dev', ...passthrough], {
+		child = spawn(runtimeExec(), [viteBin, 'dev', ...passthrough], {
 			cwd,
 			stdio: 'inherit',
 			env: process.env
@@ -235,7 +245,7 @@ async function passthroughCommand(name, passthrough) {
 		);
 	}
 	const viteBin = findViteBin(cwd);
-	const child = spawn(process.execPath, [viteBin, name, ...passthrough], {
+	const child = spawn(runtimeExec(), [viteBin, name, ...passthrough], {
 		cwd,
 		stdio: 'inherit',
 		env: process.env

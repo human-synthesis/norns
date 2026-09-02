@@ -7,6 +7,21 @@ import { indexUnits, listUnits } from './address.js';
 import { APP_SCHEMA, MODULE_SCHEMA, UNIT_SCHEMAS, schemaIssues } from './meta.js';
 import { refineSpecs } from './refine.js';
 
+// Kinds whose unit name is emitted verbatim as an exported identifier
+// (`export <name> := …` in the generated module files). A JS reserved word
+// there would only fail at generation's self-check, after the spec change
+// has already been committed — refuse it here instead.
+const IDENTIFIER_KINDS = new Set(['Query', 'Action', 'Service', 'Job']);
+const RESERVED_WORDS = new Set([
+	'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+	'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
+	'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'new',
+	'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try',
+	'typeof', 'var', 'void', 'while', 'with', 'let', 'static', 'yield',
+	'await', 'implements', 'interface', 'package', 'private', 'protected',
+	'public', 'arguments', 'eval'
+]);
+
 /**
  * @typedef {{ level: 'error' | 'warning', address: string, message: string }} Issue
  * @typedef {{
@@ -73,6 +88,13 @@ export function validateSpecs(dir) {
 		issues.push(...schemaIssues(MODULE_SCHEMA, value, name));
 		for (const unit of listUnits(name, value)) {
 			issues.push(...schemaIssues(UNIT_SCHEMAS[unit.kind], unit.value, unit.address));
+			if (IDENTIFIER_KINDS.has(unit.kind) && RESERVED_WORDS.has(unit.name)) {
+				issues.push({
+					level: 'error',
+					address: unit.address,
+					message: `${unit.kind} name "${unit.name}" is a reserved JavaScript word and cannot become an exported identifier — rename it (e.g. "remove" instead of "delete")`
+				});
+			}
 		}
 	}
 

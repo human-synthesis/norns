@@ -195,6 +195,17 @@ describe('generateApp layout output', () => {
 		expect(text).toContain('<main class="norns-main">{@render children()}</main>');
 	});
 
+	test('settings.shell: false suppresses the admin shell even with static pages', () => {
+		const specs = {
+			app: { name: 'todo', settings: { shell: false } },
+			modules: { tasks: { pages: { index: { route: '/' } } } }
+		};
+		const { text } = layoutFile(specs, false);
+		expect(text).not.toContain('norns-shell');
+		expect(text).not.toContain('norns-sidebar');
+		expect(text).toContain('{@render children()}');
+	});
+
 	test('routes/+layout.svelte is written and picks up src/app.css when present', () => {
 		const { root, dir, done } = specsDir({ app: APP, orders: ORDERS, catalog: CATALOG });
 		try {
