@@ -1,5 +1,10 @@
 [
 	{
+		"from": "catalog.Policy.Product",
+		"to": "catalog.Entity.Product",
+		"type": "guards"
+	},
+	{
 		"from": "orders.Query.board",
 		"to": "orders.Entity.Order",
 		"type": "reads"

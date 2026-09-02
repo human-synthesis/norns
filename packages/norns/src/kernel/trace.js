@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { actionEntity } from './emit-units.js';
+import { isAddress, parseAddress } from './address.js';
 import { shapeIssues } from '../server/service.js';
 import { normalizeField } from './emit-schema.js';
 import { generateApp } from './generate.js';
@@ -226,6 +227,85 @@ function serviceAutoFixtures(specs) {
 }
 
 const looseEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const subsetEq = (row, want) =>
+	row !== undefined && Object.entries(want ?? {}).every(([k, v2]) => looseEq(row[k], v2));
+
+/** K-29: synthesize the principal an example runs as. Seeded rows are owned
+ * by the trace user, so any other principal exercises the ownership guard. */
+function principalFor(as) {
+	if (as === undefined || as === 'owner') return TRACE_USER;
+	if (as === 'anonymous') return null;
+	if (as.startsWith('role:')) return { id: 'other-user', roles: [as.slice(5)] };
+	return { id: 'other-user', roles: [] };
+}
+
+const DERIVED_CAP = 10;
+
+/**
+ * K-28: derived status cases — for an action whose generated steps set a
+ * literal `status` on a machined entity, every state WITHOUT a declared
+ * edge to that target is a refusal case: seed `$state`, run, and the
+ * action must throw (requires guard or the runtime 409 — either refusal
+ * counts; the write landing is the failure). Runs against the generated
+ * shells, never a re-interpretation, so sandbox and runtime cannot drift.
+ */
+function derivedStatusCases(moduleName, actionSpec, specs) {
+	if (actionSpec.impl === 'custom') return [];
+	const target = actionEntity(moduleName, actionSpec, specs);
+	const entitySpec = target && specs.modules[target.module]?.entities?.[target.entity];
+	const machine = entitySpec?.status;
+	if (!machine) return [];
+	const setStep = (actionSpec.steps ?? []).find((s) => typeof s.set?.status === 'string');
+	if (!setStep) return [];
+	const to = setStep.set.status;
+	const idKey = idInputKey(actionSpec);
+	if (!idKey) return [];
+	const edgesOf = (from) => (Array.isArray(machine[from]) ? machine[from] : Object.keys(machine[from] ?? {}));
+	return Object.keys(machine)
+		.filter((from) => !edgesOf(from).includes(to))
+		.slice(0, DERIVED_CAP)
+		.map((from) => ({ input: { [idKey]: `$${from}` }, derived: `illegal-transition ${from} -> ${to}` }));
+}
+
+const idInputKey = (actionSpec) =>
+	Object.entries(actionSpec.input ?? {}).find(
+		([, ref]) => typeof ref === 'string' && ref.replace(/\?$/, '').endsWith('.id')
+	)?.[0];
+
+/**
+ * K-34/D33: derived permission matrix — for an ownership-guarded action,
+ * a non-owner and an anonymous caller addressing someone else's row (the
+ * IDOR shape) must both be refused by the generated shell. Derived only
+ * when the write policy is ownership-based, so a deliberately open policy
+ * never yields false alarms.
+ */
+function derivedPermissionCases(moduleName, actionSpec, specs) {
+	if (actionSpec.impl === 'custom') return [];
+	const target = actionEntity(moduleName, actionSpec, specs);
+	const write = target && specs.modules[target.module]?.policies?.[target.entity]?.write;
+	if (typeof write !== 'string' || !write.includes('owner') || write.includes('any')) return [];
+	const idKey = idInputKey(actionSpec);
+	if (!idKey) {
+		// K-39/D44: a create action derives its denied-create case — an anonymous
+		// caller must be refused by the candidate-row write check.
+		const createStep = (actionSpec.steps ?? []).find((s) => s?.create);
+		if (!createStep) return [];
+		return [
+			{
+				as: 'anonymous',
+				input: actionSpec.examples?.[0]?.input ?? {},
+				expect: 'denied',
+				derived: 'permission: anonymous create refused'
+			}
+		];
+	}
+	const handle = actionSpec.examples?.[0]?.input?.[idKey] ?? '$seed';
+	if (typeof handle !== 'string' || !handle.startsWith('$')) return [];
+	return [
+		{ as: 'other', input: { [idKey]: handle }, expect: 'denied', derived: 'permission: non-owner refused' },
+		{ as: 'anonymous', input: { [idKey]: handle }, expect: 'denied', derived: 'permission: anonymous refused' }
+	];
+}
 
 function matchCalls(calls, want) {
 	return (Array.isArray(want) ? want : []).every((w) => {
@@ -246,6 +326,11 @@ function checkExpect(record) {
 	record.pass = Object.entries(record.expect).every(([key, want]) => {
 		if (key === 'calls') return matchCalls(record.calls, want);
 		if (key === 'frames') return looseEq(record.frames, want);
+		if (record.rows !== undefined) {
+			if (key === 'count') return record.rows.length === want;
+			if (key === 'first') return subsetEq(record.rows[0], want);
+			if (key === 'rows') return looseEq(record.rows, want);
+		}
 		if (key === 'state') {
 			return Object.entries(want ?? {}).every(([field, v2]) => looseEq(record.state?.[field], v2));
 		}
@@ -318,10 +403,29 @@ export async function traceApp(dir, opts = {}) {
 				const address = `${moduleName}.Action.${name}`;
 				const target = actionEntity(moduleName, actionSpec, specs);
 
-				for (const [index, example] of (actionSpec.examples ?? []).entries()) {
+				const authored = actionSpec.examples ?? [];
+				const derived =
+					opts.derived === false
+						? []
+						: [
+								...derivedStatusCases(moduleName, actionSpec, specs),
+								...derivedPermissionCases(moduleName, actionSpec, specs)
+							];
+				for (const [index, example] of [...authored, ...derived].entries()) {
 					const events = [];
 					const calls = [];
-					const record = { address, index, input: example.input ?? {}, expect: example.expect ?? {}, events, calls };
+					const expectDenied = example.expect === 'denied';
+					const refusalCase = expectDenied || example.derived !== undefined;
+					const record = {
+						address,
+						index,
+						input: example.input ?? {},
+						expect: refusalCase ? {} : (example.expect ?? {}),
+						events,
+						calls,
+						...(example.derived !== undefined ? { src: 'derived', derived: example.derived } : {}),
+						...(example.as !== undefined ? { as: example.as } : {})
+					};
 					cases.push(record);
 					try {
 						const db = await betterSqlite(':memory:');
@@ -342,19 +446,93 @@ export async function traceApp(dir, opts = {}) {
 						}
 
 						const container = recordingContainer(db, { fixtures: opts.fixtures, auto, events, calls });
-						record.result = await mod[name].run({ input: example.input ?? {}, container, user });
+						record.result = await mod[name].run({
+							input: example.input ?? {},
+							container,
+							user: example.as !== undefined ? principalFor(example.as) : user
+						});
+
+						if (refusalCase) {
+							// the run was supposed to be refused — succeeding is the bug
+							record.pass = false;
+							record.error = expectDenied
+								? `expected denial for as: ${example.as ?? 'owner'}, but the action succeeded`
+								: `${record.derived} was allowed — the machine/requires guard did not refuse it`;
+							continue;
+						}
 
 						if (seededId && target) {
 							record.row = (
 								await db.select().from(seededId.table).where(eq(seededId.table.id, seededId.value)).limit(1)
 							)[0];
+						} else if (target && typeof record.result?.id === 'string') {
+							// K-39: create actions return the new id — read the row back so
+							// plain expect keys assert what actually landed.
+							const table = tables[`${target.module}.${target.entity}`];
+							if (table) {
+								record.row = (
+									await db.select().from(table).where(eq(table.id, record.result.id)).limit(1)
+								)[0];
+							}
 						}
 
 						checkExpect(record);
 					} catch (e) {
+						if (refusalCase) {
+							record.pass = true;
+							record.status = e?.status;
+							continue;
+						}
 						record.pass = false;
 						record.error = e?.body?.message ?? e?.message ?? String(e);
 						record.status = e?.status;
+					}
+				}
+			}
+
+			// Queries (K-30) — `given` rows seed the sandbox store, expects speak rows
+			const queriesFile = join(scratch, 'lib', moduleName, 'queries.js');
+			const queryNames = Object.entries(moduleSpec.queries ?? {})
+				.filter(([, q]) => (q.examples ?? []).length > 0)
+				.map(([n]) => n)
+				.sort();
+			if (queryNames.length > 0 && existsSync(queriesFile)) {
+				const qMod = await import(pathToFileURL(queriesFile).href);
+				for (const name of queryNames) {
+					const q = moduleSpec.queries[name];
+					const from = isAddress(q.from)
+						? { module: parseAddress(q.from).module, entity: parseAddress(q.from).name }
+						: { module: moduleName, entity: q.from };
+					for (const [index, example] of q.examples.entries()) {
+						const record = {
+							address: `${moduleName}.Query.${name}`,
+							index,
+							expect: example.expect ?? {},
+							...(example.as !== undefined ? { as: example.as } : {})
+						};
+						cases.push(record);
+						try {
+							const db = await betterSqlite(':memory:');
+							for (const stmt of ddl) await db.run(sql.raw(stmt));
+							for (const [entName, rows] of Object.entries(example.given ?? {})) {
+								const entModule = specs.modules[moduleName]?.entities?.[entName] ? moduleName : from.module;
+								const table = tables[`${entModule}.${entName}`];
+								const entitySpec = specs.modules[entModule]?.entities?.[entName];
+								if (!table || !entitySpec) throw new Error(`given: no entity "${entName}" to seed`);
+								for (const [i, row] of rows.entries()) {
+									await db.insert(table).values({ ...seedRow(row.id ?? `given-${i}`, entitySpec), ...row });
+								}
+							}
+							const container = recordingContainer(db, { fixtures: opts.fixtures, auto, events: [], calls: [] });
+							record.rows = await qMod[name]({
+								container,
+								user: example.as !== undefined ? principalFor(example.as) : user
+							});
+							checkExpect(record);
+						} catch (e) {
+							record.pass = false;
+							record.error = e?.body?.message ?? e?.message ?? String(e);
+						}
 					}
 				}
 			}

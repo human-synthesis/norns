@@ -57,14 +57,31 @@ const fieldObject = v.pipe(
 		ref: v.optional(unitRef),
 		optional: v.optional(v.boolean()),
 		unique: v.optional(v.boolean()),
-		default: v.optional(v.unknown())
+		default: v.optional(v.unknown()),
+		// D30/D31: explicit bound (text/file get a generated default cap when
+		// omitted), upload MIME allowlist, and the sensitive-data contract.
+		max: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+		mime: v.optional(v.array(v.string())),
+		sensitive: v.optional(v.boolean())
 	}),
 	v.check((f) => (f.type === 'ref') === (f.ref !== undefined), 'ref fields need `ref`, others must not have it')
 );
 const field = v.union([v.picklist(FIELD_TYPES), fieldObject]);
 
+// `as` (K-29): the principal a case runs under — omitted/'owner' = the trace
+// user, 'anonymous' = no user, 'role:<name>' = a non-owner with that role,
+// anything else = a plain non-owner. `expect: "denied"` asserts refusal.
 const example = v.strictObject({
 	input: v.optional(v.unknown()),
+	as: v.optional(v.string()),
+	expect: v.optional(v.unknown())
+});
+
+// Query examples (K-30): `given` seeds the sandbox store per entity; expects
+// speak rows — count / first (subset of the first row) / rows (exact).
+const queryExample = v.strictObject({
+	given: v.optional(v.record(ident, v.array(v.record(v.string(), v.unknown())))),
+	as: v.optional(v.string()),
 	expect: v.optional(v.unknown())
 });
 
@@ -86,7 +103,10 @@ const Query = v.strictObject({
 	groupBy: v.optional(v.string()),
 	filter: v.optional(expr),
 	sort: v.optional(v.union([v.string(), v.array(v.string())])),
-	limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1)))
+	limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+	// D31: sensitive fields are excluded from query output unless revealed here
+	reveal: v.optional(v.array(ident)),
+	examples: v.optional(v.array(queryExample))
 });
 
 const Action = v.pipe(
@@ -112,6 +132,17 @@ const Policy = v.strictObject({
 	run: v.optional(v.record(ident, expr))
 });
 
+// Page render checks (D27/K-31): the a11y vocabulary app.snapshot and the
+// smoke matrix share — role/element, text, count (number or ">=N"-style).
+const pageCheck = v.pipe(
+	v.strictObject({
+		role: v.optional(v.string()),
+		text: v.optional(v.string()),
+		count: v.optional(v.union([v.number(), v.string()]))
+	}),
+	v.check((c) => c.role !== undefined || c.text !== undefined, 'a page check needs role or text')
+);
+
 const Page = v.pipe(
 	v.strictObject({
 		uid,
@@ -121,6 +152,7 @@ const Page = v.pipe(
 		state: v.optional(v.record(ident, v.string())),
 		components: v.optional(v.array(v.record(v.string(), v.unknown()))),
 		slots: v.optional(v.array(ident)),
+		expect: v.optional(v.array(pageCheck)),
 		examples: v.optional(v.array(example)),
 		impl: v.optional(v.picklist(['generated', 'custom']))
 	}),
@@ -253,6 +285,15 @@ const Endpoint = v.pipe(
 				)
 			})
 		),
+		// D30: public surface declares its own limits — rate + cross-origin policy
+		rateLimit: v.optional(
+			v.strictObject({
+				per: v.picklist(['ip', 'user']),
+				rpm: v.pipe(v.number(), v.integer(), v.minValue(1))
+			})
+		),
+		cors: v.optional(v.picklist(['same-origin', 'any'])),
+		capabilities: v.optional(v.array(v.string())),
 		impl: v.optional(v.literal('custom')),
 		examples: v.optional(v.array(example))
 	}),

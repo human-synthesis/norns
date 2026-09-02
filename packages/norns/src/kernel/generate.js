@@ -59,6 +59,8 @@ export function checkGenerate(specs, opts = {}) {
 	refusals.push(...checkSnippetBindings(specs, opts.snippetSlots ?? null));
 	refusals.push(...checkTokenOverrides(specs, opts.tokens ?? null));
 	refusals.push(...checkNetworkInBodies(specs));
+	refusals.push(...checkBodyHygiene(specs));
+	refusals.push(...checkAppComponents(specs));
 
 	for (const [moduleName, spec] of Object.entries(specs.modules)) {
 		for (const unit of listUnits(moduleName, spec)) {
@@ -228,6 +230,154 @@ export function checkNetworkInBodies(specs) {
 				message: `custom body calls global fetch() at ${rel}:${hit + 1} — the generated service client is the only network path`,
 				fix: 'declare the host as a Service (with auth binding + operations) and call it through the generated client'
 			});
+		}
+	}
+	return refusals;
+}
+
+/**
+ * D40/K-36: app-local Component bindings are contract-checked like palette
+ * ones — the unit must exist, `with:` keys must be declared props, and the
+ * `.n` body must be on disk (the page imports it).
+ *
+ * @param {{ dir?: string, modules: Record<string, *> }} specs
+ * @returns {Refusal[]}
+ */
+export function checkAppComponents(specs) {
+	/** @type {Refusal[]} */
+	const refusals = [];
+	const appRoot = typeof specs.dir === 'string' ? dirname(specs.dir) : null;
+
+	const checkUnit = (at, path, addr) => {
+		const parsed = parseAddress(addr);
+		const unit = specs.modules[parsed.module]?.components?.[parsed.name];
+		if (unit === undefined) {
+			refusals.push({
+				address: at,
+				path,
+				code: 'INVALID_BINDING',
+				message: `no Component declared at ${addr}`,
+				fix: `declare ${addr} (props/events) and write its body via setBody`
+			});
+			return null;
+		}
+		const rel = `src/${parsed.module}/components/${parsed.name}.n`;
+		if (appRoot !== null && !existsSync(join(appRoot, rel))) {
+			refusals.push({
+				address: addr,
+				path: rel,
+				code: 'COMPONENT_BODY_MISSING',
+				message: `Component ${addr} has no body at ${rel}`,
+				fix: `write it with { op: "setBody", path: "${addr}", value: "<pug>" }`
+			});
+		}
+		return unit;
+	};
+
+	for (const [moduleName, spec] of Object.entries(specs.modules)) {
+		for (const [pageName, page] of Object.entries(spec.pages ?? {})) {
+			const at = `${moduleName}.Page.${pageName}`;
+			(page.components ?? []).forEach((entry, i) => {
+				const base = `${at}.components[${i}]`;
+				if (typeof entry?.component === 'string' && isAddress(entry.component)) {
+					const parsed = parseAddress(entry.component);
+					if (parsed.kind === 'Component') {
+						const unit = checkUnit(at, base, entry.component);
+						if (unit) {
+							const declared = new Set(Object.keys(unit.props ?? {}));
+							for (const key of Object.keys(entry.with ?? {})) {
+								if (!declared.has(key)) {
+									refusals.push({
+										address: at,
+										path: `${base}.with.${key}`,
+										code: 'INVALID_BINDING',
+										message: `<${entry.component}> binding rejected: "${key}" is not a declared prop`,
+										fix: `declare props.${key} on the Component or drop the binding`
+									});
+								}
+							}
+						}
+						return;
+					}
+				}
+				for (const [key, value] of Object.entries(entry ?? {})) {
+					if (typeof value !== 'string' || !isAddress(value)) continue;
+					if (parseAddress(value).kind === 'Component') checkUnit(at, `${base}.${key}`, value);
+				}
+			});
+		}
+	}
+	return refusals;
+}
+
+const RAW_SQL_RE = /\bsql\.raw\s*\(|\bsql`/;
+const PUG_UNESCAPED_RE = /!\{/;
+
+const KIND_COLLECTIONS = { Action: 'actions', Job: 'jobs', Function: 'functions', Endpoint: 'endpoints', Worker: 'workers', Route: 'routes' };
+
+/**
+ * K-35/D35: close the escape hatches UNDECLARED_NETWORK left open —
+ * token-shaped string literals in custom bodies (SECRET_IN_BODY), raw SQL
+ * without a declared `raw-sql` capability (RAW_SQL), and unescaped Pug
+ * interpolation in custom `.n` snippet templates (PUG_UNESCAPED).
+ *
+ * @param {{ dir?: string, modules: Record<string, *> }} specs
+ * @returns {Refusal[]}
+ */
+export function checkBodyHygiene(specs) {
+	if (typeof specs.dir !== 'string') return [];
+	const appRoot = dirname(specs.dir);
+	/** @type {Refusal[]} */
+	const refusals = [];
+	for (const [moduleName, spec] of Object.entries(specs.modules)) {
+		for (const [address, rel] of customBodyFiles(moduleName, spec)) {
+			const file = join(appRoot, rel);
+			if (!existsSync(file)) continue;
+			const lines = readFileSync(file, 'utf-8').split('\n');
+			const secretAt = lines.findIndex((line) =>
+				[...line.matchAll(/'([^']*)'|"([^"]*)"/g)].some((m) => looksLikeSecret(m[1] ?? m[2]))
+			);
+			if (secretAt !== -1) {
+				refusals.push({
+					address,
+					path: `${rel}:${secretAt + 1}`,
+					code: 'SECRET_IN_BODY',
+					message: `custom body holds a token-shaped literal at ${rel}:${secretAt + 1}`,
+					fix: 'read secrets from the env binding named in spec (wrangler secret put), never a literal'
+				});
+			}
+			const kind = address.split('.')[1];
+			const unit = spec[KIND_COLLECTIONS[kind]]?.[address.split('.')[2]];
+			const allowed = Array.isArray(unit?.capabilities) && unit.capabilities.includes('raw-sql');
+			if (!allowed) {
+				const sqlAt = lines.findIndex((line) => RAW_SQL_RE.test(line));
+				if (sqlAt !== -1) {
+					refusals.push({
+						address,
+						path: `${rel}:${sqlAt + 1}`,
+						code: 'RAW_SQL',
+						message: `custom body uses raw SQL at ${rel}:${sqlAt + 1}`,
+						fix: "use the drizzle query builder, or declare capabilities: ['raw-sql'] on the unit"
+					});
+				}
+			}
+		}
+		for (const name of Object.keys(spec.snippets ?? {})) {
+			const rel = `src/${moduleName}/snippets/${name}.n`;
+			const file = join(appRoot, rel);
+			if (!existsSync(file)) continue;
+			const hit = readFileSync(file, 'utf-8')
+				.split('\n')
+				.findIndex((line) => PUG_UNESCAPED_RE.test(line));
+			if (hit !== -1) {
+				refusals.push({
+					address: `${moduleName}.Snippet.${name}`,
+					path: `${rel}:${hit + 1}`,
+					code: 'PUG_UNESCAPED',
+					message: `snippet renders unescaped HTML via !{…} at ${rel}:${hit + 1}`,
+					fix: 'use escaped {interpolation}; unescaped output is an XSS vector'
+				});
+			}
 		}
 	}
 	return refusals;
@@ -700,19 +850,38 @@ export function liveRouteFile() {
  * @returns {{ path: string, text: string }}
  */
 export function layoutFile(specs, hasAppCss, hasTokens = false) {
-	const nav = [];
-	const shell = specs?.app?.settings?.shell !== false;
-	for (const [moduleName, spec] of Object.entries(shell ? (specs?.modules ?? {}) : {})) {
-		for (const [name, p] of Object.entries(spec?.pages ?? {})) {
-			const route = p?.route;
-			if (typeof route !== 'string' || route.includes('[') || route.includes(':')) continue;
-			// Generic page names label as their module: companies.Page.index → "Companies".
-			const label = ['index', 'home', 'main', 'page'].includes(name) ? moduleName : name;
-			nav.push({ href: route, label: humanizeName(label) });
+	let nav = [];
+	const shellSetting = specs?.app?.settings?.shell;
+	const shell = shellSetting !== false;
+	const shellCfg = shellSetting && typeof shellSetting === 'object' ? shellSetting : null;
+
+	// D46/K-40: `settings.shell.nav` is the middle grain — declared order,
+	// grouping and naming of the chrome the generator already emits.
+	if (shellCfg?.nav && Array.isArray(shellCfg.nav)) {
+		for (const group of shellCfg.nav) {
+			let head = typeof group?.group === 'string' ? group.group : null;
+			for (const addr of Array.isArray(group?.pages) ? group.pages : []) {
+				const [m, , n] = String(addr).split('.');
+				const p = specs?.modules?.[m]?.pages?.[n];
+				if (typeof p?.route !== 'string') continue;
+				const label = ['index', 'home', 'main', 'page'].includes(n) ? m : n;
+				nav.push({ href: p.route, label: humanizeName(label), ...(head ? { head } : {}) });
+				head = null; // group header renders once, on its first page
+			}
 		}
+	} else {
+		for (const [moduleName, spec] of Object.entries(shell ? (specs?.modules ?? {}) : {})) {
+			for (const [name, p] of Object.entries(spec?.pages ?? {})) {
+				const route = p?.route;
+				if (typeof route !== 'string' || route.includes('[') || route.includes(':')) continue;
+				// Generic page names label as their module: companies.Page.index → "Companies".
+				const label = ['index', 'home', 'main', 'page'].includes(name) ? moduleName : name;
+				nav.push({ href: route, label: humanizeName(label) });
+			}
+		}
+		nav.sort((a, b) => a.href.localeCompare(b.href));
 	}
-	nav.sort((a, b) => a.href.localeCompare(b.href));
-	const brand = humanizeName(specs?.app?.name ?? 'App');
+	const brand = shellCfg?.brand ?? humanizeName(specs?.app?.name ?? 'App');
 
 	const script = [
 		'<script>',
@@ -730,6 +899,7 @@ export function layoutFile(specs, hasAppCss, hasTokens = false) {
 				`\t\t<div class="norns-brand">${brand}</div>`,
 				'\t\t<nav class="norns-nav">',
 				'\t\t\t{#each nav as item (item.href)}',
+				'\t\t\t\t{#if item.head}<div class="norns-nav-group">{item.head}</div>{/if}',
 				"\t\t\t\t<a href={item.href} aria-current={page.url.pathname === item.href ? 'page' : undefined}>{item.label}</a>",
 				'\t\t\t{/each}',
 				'\t\t</nav>',
@@ -846,6 +1016,19 @@ export function generateApp(dir, opts = {}) {
 	// App-level: a root layout so generated routes render inside a shell.
 	if (pending.length > 0 || !existsSync(join(outRoot, 'routes', '+layout.svelte'))) {
 		pending.push(layoutFile(specs, existsSync(join(appRoot, 'src', 'app.css')), Boolean(overrides)));
+	}
+
+	// K-40/D45: app settings materialize for the hook (serializer, dev seed,
+	// auth wiring) — the spec is the source, the hook only consumes.
+	if (specs.app?.settings && Object.keys(specs.app.settings).length > 0) {
+		const settingsFile = {
+			path: 'lib/app/settings.c',
+			text: `// GENERATED by \`norns generate\` — do not edit.\n\nexport SETTINGS := ${JSON.stringify(specs.app.settings, null, '\t')}\n`
+		};
+		const current = join(outRoot, settingsFile.path);
+		if (!existsSync(current) || readFileSync(current, 'utf-8') !== settingsFile.text) {
+			pending.push(settingsFile);
+		}
 	}
 
 	const failures = selfCheck(pending);

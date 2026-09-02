@@ -213,9 +213,9 @@ const ACTIVITIES = {
 	triggers: { 'contacts.Contact.deleted': 'activities.Action.detachContact' }
 };
 
-writeSpec(join(out, 'app.tron'), APP);
-writeSpec(join(out, 'companies.tron'), COMPANIES);
-writeSpec(join(out, 'contacts.tron'), CONTACTS);
-writeSpec(join(out, 'deals.tron'), DEALS);
-writeSpec(join(out, 'activities.tron'), ACTIVITIES);
+writeSpec(join(out, 'app.t'), APP);
+writeSpec(join(out, 'companies.t'), COMPANIES);
+writeSpec(join(out, 'contacts.t'), CONTACTS);
+writeSpec(join(out, 'deals.t'), DEALS);
+writeSpec(join(out, 'activities.t'), ACTIVITIES);
 console.log(`wrote 5 spec files to ${out}`);

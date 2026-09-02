@@ -473,7 +473,7 @@ Commands:
   migrate status                     list applied + pending migrations
   migrate up                         apply pending migrations
   migrate create <feature>/<name>    scaffold a new SQL migration
-  validate [dir]                     validate specs/*.tron (default dir: ./specs)
+  validate [dir]                     validate specs/*.t (default dir: ./specs; legacy .tron accepted)
   generate [dir]                     validate specs and generate code into .norns/generated/
   trace [dir]                        run Action examples against a sandboxed in-memory SQLite
   lint                               scan .c/.civet/.n + vite.config for known AI pitfalls

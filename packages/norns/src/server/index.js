@@ -1,6 +1,6 @@
 export { Container, createContainer } from './container.js';
 export { withScope, getScope, getContainer } from './scope.js';
-export { boot, createApp } from './boot.js';
+export { boot, createApp, seedDev } from './boot.js';
 export { contextHandle } from './handle/context.js';
 export { errorHandle } from './handle/error.js';
 export { authHandle, normalizeUser } from './handle/auth.js';

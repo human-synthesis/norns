@@ -37,6 +37,44 @@ async function verifyAuth(def, event, bodyText, container) {
 	if (!ok) throw error(401, { message: 'unauthorized' });
 }
 
+/**
+ * Rate limiting (R-17/D30): a declared `rateLimit` is enforced before auth
+ * or body. When the env carries a `RATE_LIMITER` Cloudflare rate-limiting
+ * binding it is used (no extra round trip); otherwise an in-process sliding
+ * window backs dev and single-isolate deployments.
+ */
+const windows = new Map();
+
+async function checkRateLimit(def, event, container) {
+	if (!def.rateLimit) return;
+	const who =
+		def.rateLimit.per === 'user'
+			? (event.locals?.user?.id ?? 'anonymous')
+			: (event.getClientAddress?.() ?? 'unknown');
+	const key = `${def.name}:${who}`;
+	const native = envOf(container).RATE_LIMITER;
+	if (native && typeof native.limit === 'function') {
+		const { success } = await native.limit({ key });
+		if (!success) throw error(429, { message: 'rate limited' });
+		return;
+	}
+	const now = Date.now();
+	const hits = (windows.get(key) ?? []).filter((t) => now - t < 60_000);
+	if (hits.length >= def.rateLimit.rpm) throw error(429, { message: 'rate limited' });
+	hits.push(now);
+	windows.set(key, hits);
+}
+
+/** CORS (D30): 'same-origin' (the default for declared `cors`) refuses
+ * cross-origin browser requests outright; 'any' answers them openly. */
+function checkCors(def, event) {
+	if (!def.cors) return null;
+	const origin = event.request.headers.get('origin');
+	if (origin === null || origin === event.url.origin) return null;
+	if (def.cors === 'same-origin') throw error(403, { message: 'cross-origin request refused' });
+	return origin; // 'any' — echo below
+}
+
 // Query-string values arrive as strings; nudge them toward the declared type.
 const COERCE = {
 	int: (s) => (/^-?\d+$/.test(s) ? Number(s) : s),
@@ -97,6 +135,8 @@ export function endpoint(def) {
 	return async (event) => {
 		const container = event.locals.container;
 		const method = event.request.method;
+		await checkRateLimit(def, event, container);
+		const corsOrigin = checkCors(def, event);
 		const usesBody = method !== 'GET' && method !== 'DELETE' && method !== 'HEAD';
 		const bodyText = usesBody ? await event.request.text() : '';
 		await verifyAuth(def, event, bodyText, container);
@@ -130,13 +170,18 @@ export function endpoint(def) {
 		}
 
 		const result = await def.body(ctx);
-		if (result instanceof Response) return result;
+		if (result instanceof Response) {
+			if (corsOrigin) result.headers.set('access-control-allow-origin', corsOrigin);
+			return result;
+		}
 		if (def.output) {
 			const issues = shapeIssues(def.output, result, 'output');
 			if (issues.length > 0) {
 				throw error(500, { message: `Endpoint ${def.name}: ${issues.join('; ')}`, issues });
 			}
 		}
-		return json(result ?? null);
+		const response = json(result ?? null);
+		if (corsOrigin) response.headers.set('access-control-allow-origin', corsOrigin);
+		return response;
 	};
 }

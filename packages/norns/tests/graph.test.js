@@ -42,7 +42,8 @@ describe('moduleEdges', () => {
 	});
 
 	test('modules without cross-refs produce no edges', () => {
-		expect(moduleEdges('catalog', CATALOG)).toEqual([]);
+		const { policies: _policies, ...bare } = CATALOG;
+		expect(moduleEdges('catalog', bare)).toEqual([]);
 	});
 });
 

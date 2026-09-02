@@ -40,8 +40,12 @@ describe('traceApp', () => {
 		const report = await traceApp(join(root, 'specs'));
 
 		expect(report.fail).toBe(0);
-		expect(report.pass).toBe(2);
-		const byAddress = Object.fromEntries(report.cases.map((c) => [c.address, c]));
+		// 2 authored + 3 derived illegal-transition (K-28) + 2 derived permission (K-34)
+		expect(report.pass).toBe(7);
+		expect(report.cases.filter((c) => c.src === 'derived').length).toBe(5);
+		const byAddress = Object.fromEntries(
+			report.cases.filter((c) => c.src === undefined).map((c) => [c.address, c])
+		);
 
 		const submit = byAddress['orders.Action.submit'];
 		expect(submit.pass).toBe(true);

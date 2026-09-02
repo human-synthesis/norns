@@ -10,6 +10,9 @@ export const CATALOG = {
 	module: 'catalog',
 	entities: {
 		Product: { fields: { title: { type: 'text' } } }
+	},
+	policies: {
+		Product: { read: 'role:admin', write: 'role:admin' }
 	}
 };
 

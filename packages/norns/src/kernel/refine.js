@@ -114,6 +114,56 @@ export function refineSpecs(specs) {
 			if (typeof step?.enqueue === 'string') {
 				checkRef(at, fromModule, step.enqueue, 'Job', 'enqueue');
 			}
+			// D44/K-39: data steps stay one flat line — no conditionals, no
+			// nesting, no cascades; anything cleverer is honestly `impl: custom`.
+			if (step?.create !== undefined) {
+				const c = step.create;
+				if (typeof c?.entity !== 'string') {
+					issues.push({ level: 'error', address: at, message: 'create step needs { entity, values }' });
+				} else {
+					checkRef(at, fromModule, c.entity, 'Entity', 'create.entity');
+					for (const [field, value] of Object.entries(c.values ?? {})) {
+						const flat =
+							typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+						if (!flat) {
+							issues.push({
+								level: 'error',
+								address: at,
+								message: `STEP_TOO_CLEVER: create.values.${field} must be a flat input ref, $user, $initial, or literal`
+							});
+						} else if (
+							typeof value === 'string' &&
+							value.startsWith('input.') &&
+							(unitValue.input?.[value.slice(6)] ?? undefined) === undefined
+						) {
+							issues.push({
+								level: 'error',
+								address: at,
+								message: `create.values.${field}: "${value}" is not a declared input`
+							});
+						}
+					}
+				}
+			}
+			if (step?.delete !== undefined) {
+				const d = step.delete;
+				if (typeof d?.entity !== 'string') {
+					issues.push({ level: 'error', address: at, message: 'delete step needs { entity, id }' });
+				} else {
+					checkRef(at, fromModule, d.entity, 'Entity', 'delete.entity');
+					const entityName = d.entity.includes('.') ? d.entity.split('.').pop() : d.entity;
+					const owner =
+						modules[fromModule]?.policies?.[entityName] ??
+						Object.values(modules).find((m) => m?.policies?.[entityName])?.policies?.[entityName];
+					if (owner?.write === undefined) {
+						issues.push({
+							level: 'error',
+							address: at,
+							message: `delete step on ${entityName} needs the entity to declare write authority (D44/D30)`
+						});
+					}
+				}
+			}
 		}
 	}
 
@@ -151,6 +201,47 @@ export function refineSpecs(specs) {
 	}
 	for (const name of Object.keys(modules)) visit(name, []);
 
+	// K-40 (D45/D46): app settings are validated vocabulary, not free-form.
+	const settings = app?.settings;
+	if (settings && typeof settings === 'object') {
+		if (settings.serializer !== undefined && !['tron', 'json'].includes(settings.serializer)) {
+			issues.push({ level: 'error', address: 'app', message: 'settings.serializer must be "tron" or "json"' });
+		}
+		const shellNav = settings.shell && typeof settings.shell === 'object' ? settings.shell.nav : undefined;
+		for (const group of Array.isArray(shellNav) ? shellNav : []) {
+			for (const addr of Array.isArray(group?.pages) ? group.pages : []) {
+				const [m, k, n] = String(addr).split('.');
+				if (k !== 'Page' || modules[m]?.pages?.[n] === undefined) {
+					issues.push({
+						level: 'error',
+						address: 'app',
+						message: `settings.shell.nav: "${addr}" is not a declared Page`
+					});
+				}
+			}
+		}
+		// Seed rows speak entity fields, exactly like `given:` fixtures (K-30).
+		for (const [entName, rows] of Object.entries(settings.seed ?? {})) {
+			const entitySpec = Object.values(modules).find((m) => m?.entities?.[entName])?.entities?.[entName];
+			if (!entitySpec) {
+				issues.push({ level: 'error', address: 'app', message: `settings.seed seeds unknown entity "${entName}"` });
+				continue;
+			}
+			const known = new Set(['id', 'status', ...Object.keys(entitySpec.fields ?? {})]);
+			for (const row of Array.isArray(rows) ? rows : []) {
+				for (const key of Object.keys(row ?? {})) {
+					if (!known.has(key)) {
+						issues.push({
+							level: 'error',
+							address: 'app',
+							message: `settings.seed.${entName}: "${key}" is not a field of ${entName}`
+						});
+					}
+				}
+			}
+		}
+	}
+
 	const remoteEnabled = app?.settings?.remoteTransport === true;
 
 	for (const unit of index.units) {
@@ -169,6 +260,38 @@ export function refineSpecs(specs) {
 						checkRef(at, mod, f.ref, 'Entity', `fields.${fname}.ref`);
 					}
 				}
+				// D30 (warning in v4.0 → refusal in v4.1): every entity declares its
+				// access; a missing Policy ships with a ready-to-apply default-deny op.
+				if (modules[mod]?.policies?.[unit.name] === undefined) {
+					const owned = typeof value?.owner === 'string';
+					issues.push({
+						level: 'warning',
+						address: at,
+						message:
+							'D30: entity has no Policy — access must be declared (default-deny becomes a refusal in v4.1)',
+						op: {
+							op: 'set',
+							path: `${mod}.Policy.${unit.name}`,
+							value: owned
+								? { read: 'owner or role:admin', write: 'owner' }
+								: { read: 'role:admin', write: 'role:admin' }
+						}
+					});
+				}
+				for (const [fname, f] of Object.entries(value?.fields ?? {})) {
+					if (f && typeof f === 'object' && f.type === 'file' && (f.mime === undefined || f.max === undefined)) {
+						issues.push({
+							level: 'warning',
+							address: at,
+							message: `D30: file field "${fname}" should declare \`mime\` allowlist and \`max\` size`,
+							op: {
+								op: 'set',
+								path: `${mod}.Entity.${unit.name}.fields.${fname}`,
+								value: { ...f, mime: f.mime ?? ['application/octet-stream'], max: f.max ?? 10_000_000 }
+							}
+						});
+					}
+				}
 				const status = value?.status;
 				if (status && typeof status === 'object') {
 					for (const [state, nexts] of Object.entries(status)) {
@@ -185,9 +308,60 @@ export function refineSpecs(specs) {
 				}
 				break;
 			}
-			case 'Query':
-				checkRef(at, mod, value?.from, 'Entity', 'from');
+			case 'Endpoint': {
+				// D30: public surface declares its own limits.
+				if (value?.auth?.mode === 'none' && value?.rateLimit === undefined) {
+					issues.push({
+						level: 'warning',
+						address: at,
+						message: 'D30: public endpoint (auth: none) has no rateLimit (refusal in v4.1)',
+						op: { op: 'set', path: `${at}.rateLimit`, value: { per: 'ip', rpm: 60 } }
+					});
+				}
 				break;
+			}
+			case 'Query': {
+				checkRef(at, mod, value?.from, 'Entity', 'from');
+				for (const f of Array.isArray(value?.reveal) ? value.reveal : []) {
+					issues.push({
+						level: 'warning',
+						address: at,
+						message: `D31: query reveals sensitive field "${f}" — make sure every binding of this query may see it`
+					});
+				}
+				// K-30: `given` fixture rows must speak the seeded entity's fields —
+				// drift between fixtures and schema fails validate, not the trace.
+				for (const [exIndex, ex] of (Array.isArray(value?.examples) ? value.examples : []).entries()) {
+					for (const [entName, rows] of Object.entries(ex?.given ?? {})) {
+						const owner = modules[mod]?.entities?.[entName] ? mod : null;
+						const entitySpec =
+							owner !== null
+								? modules[mod].entities[entName]
+								: Object.values(modules).find((m) => m?.entities?.[entName])?.entities?.[entName];
+						if (!entitySpec) {
+							issues.push({
+								level: 'error',
+								address: at,
+								message: `examples[${exIndex}].given seeds unknown entity "${entName}"`
+							});
+							continue;
+						}
+						const known = new Set(['id', 'status', ...Object.keys(entitySpec.fields ?? {})]);
+						for (const row of Array.isArray(rows) ? rows : []) {
+							for (const key of Object.keys(row ?? {})) {
+								if (!known.has(key)) {
+									issues.push({
+										level: 'error',
+										address: at,
+										message: `examples[${exIndex}].given.${entName}: "${key}" is not a field of ${entName}`
+									});
+								}
+							}
+						}
+					}
+				}
+				break;
+			}
 			case 'Action': {
 				for (const ref of Array.isArray(value?.refresh) ? value.refresh : []) {
 					checkRef(at, mod, ref, 'Query', 'refresh');
@@ -218,9 +392,20 @@ export function refineSpecs(specs) {
 				break;
 			}
 			case 'Page': {
+				// D41 (warning v5.0 → refusal v5.1): a Page is a composition — whole
+				// custom bodies deprecate in favor of Component extraction.
+				if (value?.impl === 'custom') {
+					issues.push({
+						level: 'warning',
+						address: at,
+						message:
+							'PAGE_BODY_DEPRECATED: custom Page bodies are deprecated (refusal in v5.1) — run spec.absorb on this page for the ready-to-apply Component extraction'
+					});
+				}
 				for (const comp of Array.isArray(value?.components) ? value.components : []) {
 					if (comp && typeof comp === 'object') {
 						for (const [key, bound] of Object.entries(comp)) {
+							if (key === 'with' || bound === '$data' || bound === '$form') continue;
 							if (typeof bound === 'string' && isAddress(bound)) {
 								const addr = parseAddress(bound);
 								checkRef(at, mod, bound, addr.kind, `components.${key}`);

@@ -24,7 +24,7 @@ describe('emitModuleSchema', () => {
 
 	test('valibot schema, status picklist, Input without id', () => {
 		expect(file.text).toContain('export OrderSchema := v.strictObject({');
-		expect(file.text).toContain('note: v.optional(v.string())');
+		expect(file.text).toContain('note: v.optional(v.pipe(v.string(), v.maxLength(10000)))');
 		expect(file.text).toContain('status: v.picklist(["cancelled","draft","paid","submitted"])');
 		expect(file.text).toContain("export OrderInput := v.omit(OrderSchema, ['id'])");
 		expect(file.text).toContain('export OrderStatus := ');

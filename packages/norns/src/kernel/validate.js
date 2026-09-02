@@ -28,6 +28,7 @@ const RESERVED_WORDS = new Set([
  *   dir: string,
  *   app: *,
  *   modules: Record<string, *>,
+ *   files: Record<string, string>,
  *   hashes: Record<string, string>,
  *   version: string
  * }} LoadedSpecs
@@ -43,7 +44,7 @@ const RESERVED_WORDS = new Set([
 export function loadSpecs(dir = resolve(process.cwd(), 'specs')) {
 	const abs = resolve(dir);
 	if (!existsSync(abs)) {
-		throw new Error(`norns: no specs directory at ${abs} (expected specs/*.tron)`);
+		throw new Error(`norns: no specs directory at ${abs} (expected specs/*.t)`);
 	}
 	return { dir: abs, ...readSpecs(abs) };
 }
@@ -65,7 +66,7 @@ export function validateSpecs(dir) {
 		issues.push({
 			level: 'error',
 			address: APP_SPEC,
-			message: `missing ${APP_SPEC}.tron — every app needs an app spec`
+			message: `missing ${APP_SPEC}.t — every app needs an app spec`
 		});
 	}
 
@@ -74,7 +75,7 @@ export function validateSpecs(dir) {
 			issues.push({
 				level: 'error',
 				address: name,
-				message: `${name}.tron must be an object, got ${Array.isArray(value) ? 'array' : typeof value}`
+				message: `${specs.files[name] ?? `${name}.t`} must be an object, got ${Array.isArray(value) ? 'array' : typeof value}`
 			});
 			continue;
 		}

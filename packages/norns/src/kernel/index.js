@@ -1,7 +1,7 @@
 /**
  * Norns kernel — the spec-canonical engine (`@human-synthesis/norns/kernel`).
  *
- * Owns the pipeline: load `specs/*.tron` → validate → generate code into
+ * Owns the pipeline: load `specs/*.t` (legacy `.tron` accepted) → validate → generate code into
  * `.norns/generated/`. Kept as a subpath of the norns package (not its own
  * package) but with no imports from the rest of `src/`, so it stays
  * extractable if it ever needs its own release cadence.

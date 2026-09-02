@@ -38,7 +38,7 @@ describe('emitModulePolicies', () => {
 	});
 
 	test('modules without policies emit nothing', () => {
-		expect(emitModulePolicies('catalog', CATALOG, specs)).toBeNull();
+		expect(emitModulePolicies('bare', { module: 'bare' }, specs)).toBeNull();
 	});
 });
 
@@ -101,7 +101,7 @@ describe('emitModuleActions', () => {
 	});
 
 	test('input refs map to field-typed valibot schemas', () => {
-		expect(file.text).toContain('input: v.strictObject({ id: v.string() })');
+		expect(file.text).toContain('input: v.strictObject({ id: v.pipe(v.string(), v.maxLength(128)) })');
 	});
 
 	test('impl: custom actions emit guard-first shells delegating to $custom', () => {

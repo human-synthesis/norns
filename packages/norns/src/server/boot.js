@@ -3,6 +3,26 @@ import { Container } from './container.js';
 import { contextHandle } from './handle/context.js';
 import { authHandle } from './handle/auth.js';
 import { errorHandle } from './handle/error.js';
+import { securityHandle } from './handle/security.js';
+
+/**
+ * Dev-only convenience (K-40/D45): apply `settings.seed` rows to an empty
+ * dev store. `schemaModules` is an eager glob of the generated schema files;
+ * rows fill like `given:` fixtures — id/owner default when omitted.
+ */
+export async function seedDev(db, schemaModules, seed = {}) {
+	for (const [entity, rows] of Object.entries(seed ?? {})) {
+		const table = Object.values(schemaModules ?? {})
+			.map((m) => m?.[entity])
+			.find(Boolean);
+		if (!table || !Array.isArray(rows) || rows.length === 0) continue;
+		const existing = await db.select().from(table).limit(1);
+		if (existing.length > 0) continue;
+		await db
+			.insert(table)
+			.values(rows.map((row) => ({ id: crypto.randomUUID(), owner: 'dev', ...row })));
+	}
+}
 import { setSerializer } from './route.js';
 import { createEvents, registerTriggers } from './events.js';
 import { createJobs, registerJobs } from './job.js';
@@ -143,6 +163,7 @@ export async function boot(opts = {}) {
 	// contextHandle must come first so authHandle can bind user/session into
 	// the per-request scope it creates.
 	const handle = sequence(
+		securityHandle(opts.securityHeaders),
 		contextHandle(container),
 		...(opts.auth ? [authHandle(opts.auth, { basePath: opts.authBasePath })] : []),
 		...extras

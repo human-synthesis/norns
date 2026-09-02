@@ -50,7 +50,7 @@ describe('validateSpecs', () => {
 		}
 	});
 
-	test('missing app.tron is an error', () => {
+	test('missing app spec is an error', () => {
 		const { dir, done } = specsDir({ blog: { module: 'blog' } });
 		try {
 			const result = validateSpecs(dir);
@@ -58,7 +58,7 @@ describe('validateSpecs', () => {
 			expect(result.issues).toContainEqual({
 				level: 'error',
 				address: 'app',
-				message: expect.stringContaining('missing app.tron')
+				message: expect.stringContaining('missing app.t')
 			});
 		} finally {
 			done();
