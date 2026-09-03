@@ -368,7 +368,6 @@ export const UNIT_SCHEMAS = {
 	Service,
 	Job,
 	Endpoint,
-	Route: level3(),
 	Worker: level3({
 		room: v.optional(v.boolean()),
 		state: v.optional(v.record(ident, v.string())),
@@ -408,7 +407,6 @@ export const MODULE_SCHEMA = v.strictObject({
 	services: collection,
 	jobs: collection,
 	endpoints: collection,
-	routes: collection,
 	workers: collection,
 	adapters: collection,
 	middleware: collection,

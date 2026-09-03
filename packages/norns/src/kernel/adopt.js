@@ -120,6 +120,15 @@ export function adoptUnit(specs, { module, path, source }) {
 	if (!kindMatch) return no('file has no recognisable exports — nothing to wrap as a unit');
 	const { kind, evidence: kindEvidence } = kindMatch;
 
+	// D69: the Route wrap kind is gone (Endpoint superseded it; Route units
+	// were never emitted). Verb-handler files are still detected, but the
+	// answer is a declared Endpoint, not a wrap.
+	if (kind === 'Route') {
+		return no(
+			'exports HTTP verb handlers — declare an Endpoint (route/method/auth/input/output) and move the handler into its body; the legacy Route wrap no longer exists'
+		);
+	}
+
 	const existing = moduleSpec[KIND_KEYS[kind]]?.[name];
 	if (existing) return no(`${module}.${kind}.${name} already exists — rename the file or the unit`);
 

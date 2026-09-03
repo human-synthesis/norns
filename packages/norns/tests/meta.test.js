@@ -131,7 +131,6 @@ describe('Level-3 kinds', () => {
 	test('refused without an auth declaration', () => {
 		expect(fail('Worker', { source: 'workers/MatchRoom.c' }).length).toBeGreaterThan(0);
 		expect(fail('Worker', { source: 'workers/MatchRoom.c', auth: 'authenticated', room: true })).toEqual([]);
-		expect(fail('Route', { source: 'routes/export.c', auth: { role: 'admin' } })).toEqual([]);
 	});
 });
 

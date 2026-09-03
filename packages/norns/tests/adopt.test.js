@@ -42,19 +42,13 @@ export const charge = async (amount) => {
 `;
 
 describe('adoptUnit', () => {
-	test('a verb-exporting file becomes a Route proposal whose value passes the L3 schema', () => {
+	// D69: the Route wrap kind is gone — verb-handler files are still
+	// detected, but the answer names Endpoint instead of wrapping dead units.
+	test('a verb-exporting file is not adoptable; the refusal names Endpoint', () => {
 		const result = adoptUnit(SPECS, { module: 'orders', path: 'src/routes/api/rates/+server.c', source: ROUTE_SOURCE });
-
-		expect(result.adoptable).toBe(true);
-		expect(result.kind).toBe('Route');
-		expect(result.address).toBe('orders.Route.server');
-		expect(result.ops).toHaveLength(1);
-		expect(result.ops[0].op).toBe('set');
-		expect(result.ops[0].value.auth).toBe('authenticated');
-		expect(result.ops[0].value.capabilities).toContain('network');
-		expect(result.ops[0].value.source).toBe('src/routes/api/rates/+server.c');
-		expect(schemaIssues(UNIT_SCHEMAS.Route, result.ops[0].value, result.address)).toEqual([]);
-		expect(result.notes.join(' ')).toContain('confirm');
+		expect(result.adoptable).toBe(false);
+		expect(result.reason).toContain('Endpoint');
+		expect(result.reason).toContain('verb handlers');
 	});
 
 	test('a Durable Object becomes a room Worker with schedule/db/websocket capabilities', () => {
@@ -83,9 +77,9 @@ describe('adoptUnit', () => {
 		expect(adoptUnit(SPECS, { module: 'orders', path: 'src/x.c', source: '' }).reason).toContain('no source');
 		expect(adoptUnit(SPECS, { module: 'orders', path: 'src/x.c', source: 'const a = 1\n' }).reason).toContain('no recognisable exports');
 
-		const withRoute = structuredClone(SPECS);
-		withRoute.modules.orders.routes = { server: { source: 'x', auth: 'public' } };
-		const collision = adoptUnit(withRoute, { module: 'orders', path: 'src/+server.c', source: ROUTE_SOURCE });
+		const withWorker = structuredClone(SPECS);
+		withWorker.modules.orders.workers = { 'match-worker': { source: 'x', auth: 'authenticated' } };
+		const collision = adoptUnit(withWorker, { module: 'orders', path: 'src/match.worker.c', source: WORKER_SOURCE });
 		expect(collision.adoptable).toBe(false);
 		expect(collision.reason).toContain('already exists');
 	});

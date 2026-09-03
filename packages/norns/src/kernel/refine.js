@@ -461,15 +461,6 @@ export function refineSpecs(specs) {
 				}
 				break;
 			}
-			case 'Route': {
-				issues.push({
-					level: 'warning',
-					address: at,
-					message:
-						'schema-less Route is deprecated — declare an Endpoint (route/method/auth/input/output) instead; v3.1 refuses bare Routes'
-				});
-				break;
-			}
 			case 'Component': {
 				for (const [event, target] of Object.entries(value?.events ?? {})) {
 					checkRef(at, mod, target, 'Action', `events.${event}`);

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { compile } from '@danielx/civet';
 
-import { UNIT_SCHEMAS, schemaIssues } from '../src/kernel/meta.js';
+import { MODULE_SCHEMA, UNIT_SCHEMAS, schemaIssues } from '../src/kernel/meta.js';
 import { refineSpecs } from '../src/kernel/refine.js';
 import { checkGenerate } from '../src/kernel/generate.js';
 import { emitModuleEndpoints } from '../src/kernel/emit-units.js';
@@ -72,14 +72,15 @@ describe('Endpoint meta-schema', () => {
 	});
 });
 
-describe('legacy Route deprecation', () => {
-	test('a schema-less Route warns toward Endpoint', () => {
-		const issues = refineSpecs(
-			specsOf({ ops: { module: 'ops', routes: { legacy: { source: 'src/ops/routes/legacy.c', auth: 'user' } } } })
+describe('legacy Route removal (D69)', () => {
+	test('a routes collection is refused by the module schema, not silently carried', () => {
+		const issues = schemaIssues(
+			MODULE_SCHEMA,
+			{ module: 'ops', routes: { legacy: { source: 'src/ops/routes/legacy.c', auth: 'user' } } },
+			'ops'
 		);
-		const warning = issues.find((i) => i.level === 'warning');
-		expect(warning?.address).toBe('ops.Route.legacy');
-		expect(warning?.message).toContain('Endpoint');
+		expect(issues.length).toBeGreaterThan(0);
+		expect(issues.map((i) => i.message).join(' ')).toContain('routes');
 	});
 });
 

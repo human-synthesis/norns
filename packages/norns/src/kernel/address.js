@@ -29,7 +29,6 @@ export const KIND_KEYS = {
 	Service: 'services',
 	Job: 'jobs',
 	Endpoint: 'endpoints',
-	Route: 'routes',
 	Worker: 'workers',
 	Adapter: 'adapters',
 	Middleware: 'middleware',
