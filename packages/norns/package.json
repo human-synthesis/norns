@@ -1,53 +1,53 @@
 {
-  "name": "@human-synthesis/norns",
-  "version": "0.3.2",
-  "description": "Norns — SvelteKit with Civet, Pug, and the .n / .civet / .c file extensions",
-  "license": "MIT",
-  "author": "Daniel Teodoroiu (https://humansynthesis.ai)",
-  "type": "module",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/human-synthesis/norns.git"
-  },
-  "files": [
-    "src",
-    "bin",
-    "README.md"
-  ],
-  "bin": {
-    "norns": "./bin/norns.js"
-  },
-  "scripts": {
-    "test": "bun test"
-  },
-  "exports": {
-    ".": "./src/index.js",
-    "./auto-import": "./src/auto-import.js",
-    "./config": "./src/config.js",
-    "./vite": "./src/vite.js",
-    "./preprocess": "./src/preprocess.js",
-    "./server": "./src/server/index.js",
-    "./live-client": "./src/live-client.js",
-    "./kernel": "./src/kernel/index.js",
-    "./package.json": "./package.json"
-  },
-  "peerDependencies": {
-    "@sveltejs/kit": "^2.0.0",
-    "svelte": "^5.0.0",
-    "vite": "^5.0.0 || ^6.0.0"
-  },
-  "dependencies": {
-    "@danielx/civet": "^0.11.16",
-    "@human-synthesis/norns-core": "^0.0.10",
-    "@human-synthesis/norns-tron": "^0.2.0",
-    "drizzle-kit": "0.31.10",
-    "drizzle-orm": "0.45.2",
-    "valibot": "^1.4.0"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "publishConfig": {
-    "access": "public"
-  }
+	"name": "@human-synthesis/norns",
+	"version": "0.3.3",
+	"description": "Norns — SvelteKit with Civet, Pug, and the .n / .civet / .c file extensions",
+	"license": "MIT",
+	"author": "Daniel Teodoroiu (https://humansynthesis.ai)",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/human-synthesis/norns.git"
+	},
+	"files": [
+		"src",
+		"bin",
+		"README.md"
+	],
+	"bin": {
+		"norns": "./bin/norns.js"
+	},
+	"scripts": {
+		"test": "bun test"
+	},
+	"exports": {
+		".": "./src/index.js",
+		"./auto-import": "./src/auto-import.js",
+		"./config": "./src/config.js",
+		"./vite": "./src/vite.js",
+		"./preprocess": "./src/preprocess.js",
+		"./server": "./src/server/index.js",
+		"./live-client": "./src/live-client.js",
+		"./kernel": "./src/kernel/index.js",
+		"./package.json": "./package.json"
+	},
+	"peerDependencies": {
+		"@sveltejs/kit": "^2.0.0",
+		"svelte": "^5.0.0",
+		"vite": "^5.0.0 || ^6.0.0"
+	},
+	"dependencies": {
+		"@danielx/civet": "^0.11.16",
+		"@human-synthesis/norns-core": "^0.0.10",
+		"@human-synthesis/norns-tron": "^0.2.0",
+		"drizzle-kit": "0.31.10",
+		"drizzle-orm": "0.45.2",
+		"valibot": "^1.4.0"
+	},
+	"engines": {
+		"node": ">=18"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
 }

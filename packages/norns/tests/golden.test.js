@@ -82,4 +82,13 @@ describe('golden files', () => {
 			expect(file.text).toBe(readFileSync(join(GOLDEN, 'generated', file.path), 'utf-8'));
 		}
 	});
+
+	// K-49: a spec `title` renders verbatim as the page heading, overriding the
+	// humanized unit name — the one hook to rename or localize generated chrome.
+	test('a page title override wins over the humanized unit name', () => {
+		const files = emitAll(loadSpecs(SPECS));
+		const board = files.find((f) => f.path.endsWith('routes/orders/+page.n'));
+		expect(board.text).toContain('h1.norns-page-title Order Board');
+		expect(board.text).not.toContain('norns-page-title Board\n');
+	});
 });

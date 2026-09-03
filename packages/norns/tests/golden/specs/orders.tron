@@ -38,7 +38,8 @@
     "board": {
       "route": "/orders",
       "state": { "selected": "Order.id?" },
-      "components": [{ "kanban": "orders.Query.board", "onMove": "orders.Action.submit" }]
+      "components": [{ "kanban": "orders.Query.board", "onMove": "orders.Action.submit" }],
+      "title": "Order Board"
     }
   },
   "triggers": { "catalog.Product.deleted": "orders.Action.cancelLineItems" }

@@ -897,8 +897,11 @@ export function emitModulePages(moduleName, moduleSpec, specs) {
 			);
 		} else {
 			pug.push(`section.norns-page`);
+			// K-49: an explicit `title` wins verbatim (localized/renamed chrome);
+			// otherwise humanize the unit name (index/home/main/page → module).
 			const titleFrom = ['index', 'home', 'main', 'page'].includes(name) ? moduleName : name;
-			pug.push(`\th1.norns-page-title ${humanizeName(titleFrom)}`);
+			const pageTitle = typeof spec.title === 'string' ? spec.title : humanizeName(titleFrom);
+			pug.push(`\th1.norns-page-title ${pageTitle}`);
 			for (const c of components) {
 				pug.push(`\t${c.tag}(${c.props.join(' ')})`);
 			}

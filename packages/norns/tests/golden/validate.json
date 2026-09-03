@@ -1,6 +1,6 @@
 {
 	"ok": true,
-	"version": "1a9b5729a0f229e2ad35b2c304e8136195df6f5509c52950c1415dad1d89140a",
+	"version": "1a7a93247ae9c5ff8335fede7c7756a95f209ea6f172e791e911f617db4bd56d",
 	"modules": [
 		"catalog",
 		"orders"

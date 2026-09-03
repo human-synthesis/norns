@@ -171,6 +171,9 @@ const Page = v.pipe(
 		state: v.optional(v.record(ident, v.string())),
 		components: v.optional(v.array(v.record(v.string(), v.unknown()))),
 		slots: v.optional(v.array(ident)),
+		// K-49: a spec-authored page heading, overriding the humanized unit
+		// name. The one hook to localize or rename generated page chrome.
+		title: v.optional(v.string()),
 		expect: v.optional(v.array(pageCheck)),
 		examples: v.optional(v.array(example)),
 		impl: v.optional(v.picklist(['generated', 'custom']))

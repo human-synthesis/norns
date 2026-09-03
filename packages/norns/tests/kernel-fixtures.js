@@ -56,6 +56,8 @@ export const ORDERS = {
 	pages: {
 		board: {
 			route: '/orders',
+			// K-49: verbatim page-title override (would be humanized to "Board").
+			title: 'Order Board',
 			state: { selected: 'Order.id?' },
 			components: [{ kanban: 'orders.Query.board', onMove: 'orders.Action.submit' }]
 		}
