@@ -66,7 +66,23 @@ const fieldObject = v.pipe(
 	}),
 	v.check((f) => (f.type === 'ref') === (f.ref !== undefined), 'ref fields need `ref`, others must not have it')
 );
-const field = v.union([v.picklist(FIELD_TYPES), fieldObject]);
+// A failed union only answers "Expected (…) | Object" — no signal about
+// which key or value is wrong (a field session burned 5 probes on the ref
+// shape). Dispatch on the runtime shape instead so object fields surface
+// fieldObject's own issues, which name the offending key.
+const field = v.pipe(
+	v.union([v.string(), v.record(v.string(), v.unknown())]),
+	v.rawTransform(({ dataset, addIssue, NEVER }) => {
+		const schema = typeof dataset.value === 'string' ? v.picklist(FIELD_TYPES) : fieldObject;
+		const result = v.safeParse(schema, dataset.value);
+		if (result.success) return result.output;
+		for (const issue of result.issues) {
+			const path = v.getDotPath(issue);
+			addIssue({ message: path ? `${path}: ${issue.message}` : issue.message });
+		}
+		return NEVER;
+	})
+);
 
 // `as` (K-29): the principal a case runs under — omitted/'owner' = the trace
 // user, 'anonymous' = no user, 'role:<name>' = a non-owner with that role,

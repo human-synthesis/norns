@@ -51,6 +51,15 @@ describe('Entity', () => {
 		expect(fail('Entity', { fields: { x: { type: 'ref', ref: 'core.Entity.User' } } })).toEqual([]);
 	});
 
+	test('a wrong field-object key is named, not folded into a union mismatch', () => {
+		const issues = messages(fail('Entity', { fields: { x: { type: 'ref', entity: 'User' } } }));
+		expect(issues).toContain('entity');
+		expect(issues).not.toContain('| Object');
+		const badType = messages(fail('Entity', { fields: { x: { type: 'enum' } } }));
+		expect(badType).toContain('type');
+		expect(badType).toContain('"enum"');
+	});
+
 	test('bad uid shape', () => {
 		expect(messages(fail('Entity', { uid: 'short', fields: {} }))).toContain('ULID');
 	});
