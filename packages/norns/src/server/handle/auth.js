@@ -31,16 +31,24 @@ export function normalizeUser(user) {
  *
  * Anonymous requests get `user: null`; policy guards deny by default.
  *
- * @param {{ handler(req: Request): Response | Promise<Response>, api: { getSession(opts: { headers: Headers }): * } }} auth
+ * `auth` may also be a factory `(event) => instance | Promise<instance>`
+ * (D86/T-02): on Workers the D1 binding exists only per request, so the
+ * better-auth instance is built from the request's DB. A factory returning
+ * nothing lets the request through anonymous.
+ *
+ * @param {AuthInstance | ((event: *) => AuthInstance | undefined | Promise<AuthInstance | undefined>)} auth
  * @param {{ basePath?: string }} [opts]
  * @returns {Handle}
+ * @typedef {{ handler(req: Request): Response | Promise<Response>, api: { getSession(opts: { headers: Headers }): * } }} AuthInstance
  */
 export function authHandle(auth, { basePath = '/api/auth' } = {}) {
 	return async ({ event, resolve }) => {
+		const inst = typeof auth === 'function' ? await auth(event) : auth;
+		if (!inst) return resolve(event);
 		if (event.url.pathname === basePath || event.url.pathname.startsWith(`${basePath}/`)) {
-			return auth.handler(event.request);
+			return inst.handler(event.request);
 		}
-		const session = await auth.api.getSession({ headers: event.request.headers });
+		const session = await inst.api.getSession({ headers: event.request.headers });
 		const user = normalizeUser(session?.user ?? null);
 		event.locals.session = session?.session ?? null;
 		event.locals.user = user;

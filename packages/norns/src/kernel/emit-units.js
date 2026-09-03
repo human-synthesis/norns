@@ -135,7 +135,7 @@ export function emitModulePolicies(moduleName, moduleSpec, specs) {
 /* Queries → lib/<module>/queries.c                                    */
 /* ------------------------------------------------------------------ */
 
-const OPS_CONST = `ops := { 'and': dz.and, 'or': dz.or, 'not': dz.not, eq: dz.eq, ne: dz.ne, lt: dz.lt, lte: dz.lte, gt: dz.gt, gte: dz.gte, inArray: dz.inArray, bool: (b) => b ? dz.sql\`1 = 1\` : dz.sql\`1 = 0\` }`;
+const OPS_CONST = `ops := { 'and': dz.and, 'or': dz.or, 'not': dz.not, eq: dz.eq, ne: dz.ne, lt: dz.lt, lte: dz.lte, gt: dz.gt, gte: dz.gte, inArray: dz.inArray, isNull: dz.isNull, isNotNull: dz.isNotNull, bool: (b) => b ? dz.sql\`1 = 1\` : dz.sql\`1 = 0\` }`;
 
 const GROUP_ROWS = [
 	`groupRows := (rows, key) => {`,
@@ -303,6 +303,30 @@ function inputSchema(moduleName, action, specs) {
 const SERVICE_CALL_RE = /^([a-z][a-z0-9_]*)\.Service\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/;
 const SCOPE_PATH_RE = /^(row|input|user)(\.[A-Za-z_$][A-Za-z0-9_$]*)*$/;
 
+/** date/datetime columns are drizzle `mode: 'timestamp'` and need a real Date. */
+function isDateType(entitySpec, field) {
+	const type = normalizeField(entitySpec?.fields?.[field] ?? 'text').type;
+	return type === 'date' || type === 'datetime';
+}
+
+/**
+ * K-51/K-55: one grammar for declarative step values, create and set alike —
+ * `input.<key>` (the validated input; an ISO *string* for dates, so coerce or
+ * every date write throws `value.getTime is not a function`), `$user`,
+ * `$initial` (the entity machine's start state), or a JSON literal.
+ */
+function stepValue(v, entitySpec, field) {
+	const isDate = isDateType(entitySpec, field);
+	if (v === '$user') return 'user?.id';
+	if (v === '$initial') {
+		return JSON.stringify(entitySpec?.status ? initialState(entitySpec.status, entitySpec.initial) : null);
+	}
+	if (typeof v === 'string' && v.startsWith('input.')) {
+		return isDate ? `(${v} === undefined ? undefined : new Date(${v}))` : v;
+	}
+	return isDate && typeof v === 'string' ? `new Date(${JSON.stringify(v)})` : JSON.stringify(v);
+}
+
 /** `with:` values are scope paths (`input.id`) or JSON literals; no `with` passes the action input through. */
 function withArg(withMap) {
 	if (!withMap || typeof withMap !== 'object') return 'input';
@@ -364,24 +388,8 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 			entityImports.set(entity, `${local}schema.c`);
 			const entitySpec = specs.modules[module]?.entities?.[entity];
 			const policy = policyFor(specs, module, entity);
-			// K-51: date/datetime columns are drizzle `mode: 'timestamp'` and
-			// require a real Date — the validated input is an ISO *string*, so
-			// coerce here or every declarative date write throws
-			// `value.getTime is not a function` at the insert.
-			const isDateField = (field) => {
-				const type = normalizeField(entitySpec?.fields?.[field] ?? 'text').type;
-				return type === 'date' || type === 'datetime';
-			};
-			const valueExpr = (v, field) => {
-				if (v === '$user') return 'user?.id';
-				if (v === '$initial') {
-					return JSON.stringify(entitySpec?.status ? initialState(entitySpec.status, entitySpec.initial) : null);
-				}
-				if (typeof v === 'string' && v.startsWith('input.')) {
-					return isDateField(field) ? `(${v} === undefined ? undefined : new Date(${v}))` : v;
-				}
-				return isDateField(field) && typeof v === 'string' ? `new Date(${JSON.stringify(v)})` : JSON.stringify(v);
-			};
+			// K-51/K-55: step values share one grammar — see stepValue.
+			const valueExpr = (v, field) => stepValue(v, entitySpec, field);
 			const parts = ['id: crypto.randomUUID()'];
 			for (const field of Object.keys(createStep.create.values ?? {}).sort()) {
 				parts.push(`${field}: ${valueExpr(createStep.create.values[field], field)}`);
@@ -444,25 +452,17 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 			for (const step of custom ? [] : (action.steps ?? [])) {
 				if (step.set) {
 					const { entity: setEntity, ...fields } = step.set;
-					// K-51: same Date coercion as create steps — a literal date
-					// string written to a timestamp column must arrive as a Date.
+					// K-51/K-55: same value grammar as create steps — literal,
+					// `input.<key>`, `$user`, `$initial`; dates coerce to real Dates.
 					const setEntitySpec = specs.modules[module]?.entities?.[entity];
-					const setIsDate = (f) => {
-						const type = normalizeField(setEntitySpec?.fields?.[f] ?? 'text').type;
-						return type === 'date' || type === 'datetime';
-					};
 					const sets = Object.keys(fields)
 						.sort()
-						.map((f) =>
-							setIsDate(f) && typeof fields[f] === 'string'
-								? `${f}: new Date(${JSON.stringify(fields[f])})`
-								: `${f}: ${JSON.stringify(fields[f])}`
-						);
+						.map((f) => `${f}: ${stepValue(fields[f], setEntitySpec, f)}`);
 					// K-17: a status write must be a legal edge of the entity's
 					// machine, independent of any authored `requires` guard.
 					if ('status' in fields && statesOf(specs, module, entity).size > 0) {
 						entityImports.set(`${entity}Status`, `${local}schema.c`);
-						const to = JSON.stringify(fields.status);
+						const to = stepValue(fields.status, setEntitySpec, 'status');
 						body.push(
 							`\t\tif (!(${entity}Status[row.status] ?? []).includes(${to})) throw error(409, 'invalid transition ' + row.status + ' -> ' + ${to})`
 						);

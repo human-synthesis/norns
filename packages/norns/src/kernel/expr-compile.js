@@ -113,7 +113,8 @@ export function compileGuard(ast, opts = {}) {
  *   eq: (col: *, v: *) => *, ne: (col: *, v: *) => *,
  *   lt: (col: *, v: *) => *, lte: (col: *, v: *) => *,
  *   gt: (col: *, v: *) => *, gte: (col: *, v: *) => *,
- *   inArray: (col: *, v: *[]) => *, bool: (v: boolean) => *
+ *   inArray: (col: *, v: *[]) => *, bool: (v: boolean) => *,
+ *   isNull: (col: *) => *, isNotNull: (col: *) => *
  * }} WhereOps
  */
 
@@ -179,6 +180,13 @@ export function compileWhere(ast, ctx) {
 			throw new Error(
 				`where clauses support column-vs-literal comparisons only, got ${op} over ${JSON.stringify(args)}`
 			);
+		}
+		if (r.lit === null) {
+			// K-57/D78: SQL `col <> NULL` matches nothing — null comparisons
+			// are IS [NOT] NULL, and nothing else is defined against null.
+			if (effOp === '==') return ops.isNull(column(l.path));
+			if (effOp === '!=') return ops.isNotNull(column(l.path));
+			throw new Error(`null only supports == and != in a where clause, got ${op}`);
 		}
 		if (effOp === 'in') {
 			if (!Array.isArray(r.lit)) throw new Error('`in` in a where clause needs a list literal');

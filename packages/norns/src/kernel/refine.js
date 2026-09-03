@@ -12,7 +12,32 @@
 
 import { formatAddress, indexUnits, isAddress, parseAddress } from './address.js';
 
-/** @typedef {{ level: 'error' | 'warning', address: string, message: string }} Issue */
+/** @typedef {{ level: 'error' | 'warning', address: string, message: string, op?: * }} Issue */
+
+const SAMPLE_VALUES = {
+	text: 'sample',
+	number: 1,
+	int: 1,
+	money: 100,
+	bool: true,
+	date: '2026-01-01',
+	datetime: '2026-01-01T09:00',
+	email: 'a@example.com',
+	url: 'https://example.com',
+	json: {},
+	file: 'file-1',
+	ref: 'ref-1'
+};
+
+/** One plausible `given` row for an entity, from its field types (K-59). */
+function sampleRow(entitySpec) {
+	const row = {};
+	for (const [name, def] of Object.entries(entitySpec?.fields ?? {})) {
+		const type = String(typeof def === 'string' ? def : (def?.type ?? 'text')).replace(/\?$/, '');
+		row[name] = SAMPLE_VALUES[type] ?? 'sample';
+	}
+	return row;
+}
 
 /**
  * @param {{ app: *, modules: Record<string, *> }} specs
@@ -140,6 +165,37 @@ export function refineSpecs(specs) {
 								level: 'error',
 								address: at,
 								message: `create.values.${field}: "${value}" is not a declared input`
+							});
+						}
+					}
+				}
+			}
+			// K-55: set steps share the create grammar — flat literal, `input.<key>`
+			// (declared), `$user`, `$initial` — as siblings of `entity`.
+			if (step?.set !== undefined) {
+				const { entity, ...fields } = step.set && typeof step.set === 'object' ? step.set : {};
+				if (typeof entity !== 'string') {
+					issues.push({ level: 'error', address: at, message: 'set step needs { entity, <field>: <value>, … }' });
+				} else {
+					checkRef(at, fromModule, entity, 'Entity', 'set.entity');
+					for (const [field, value] of Object.entries(fields)) {
+						const flat =
+							typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+						if (!flat) {
+							issues.push({
+								level: 'error',
+								address: at,
+								message: `STEP_TOO_CLEVER: set.${field} must be a flat input ref, $user, $initial, or literal`
+							});
+						} else if (
+							typeof value === 'string' &&
+							value.startsWith('input.') &&
+							(unitValue.input?.[value.slice(6)] ?? undefined) === undefined
+						) {
+							issues.push({
+								level: 'error',
+								address: at,
+								message: `set.${field}: "${value}" is not a declared input`
 							});
 						}
 					}
@@ -348,6 +404,25 @@ export function refineSpecs(specs) {
 						level: 'warning',
 						address: at,
 						message: `D31: query reveals sensitive field "${f}" — make sure every binding of this query may see it`
+					});
+				}
+				// K-59/D79: a filtered query with no example is exactly the class of
+				// bug app.trace catches for free (real SQLite, real where clause) —
+				// warn with a ready fixture so the example costs one op.
+				if (value?.filter !== undefined && !(Array.isArray(value?.examples) && value.examples.length > 0)) {
+					const entName = isAddress(value.from) ? parseAddress(value.from).name : value.from;
+					const entitySpec =
+						modules[mod]?.entities?.[entName] ??
+						Object.values(modules).find((m) => m?.entities?.[entName])?.entities?.[entName];
+					issues.push({
+						level: 'warning',
+						address: at,
+						message: 'QUERY_UNTESTED: query has a filter but no examples — add one so app.trace runs the where clause against real SQLite',
+						op: {
+							op: 'set',
+							path: `${at}.examples`,
+							value: [{ given: { [entName]: [sampleRow(entitySpec)] }, expect: { count: 1 } }]
+						}
 					});
 				}
 				// K-30: `given` fixture rows must speak the seeded entity's fields —

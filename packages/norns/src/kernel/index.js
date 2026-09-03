@@ -49,7 +49,7 @@ export {
 } from './absorb.js';
 export { inferKind, inferCapabilities, inferAuth, adoptUnit, adoptFiles } from './adopt.js';
 export { loadSpecs, validateSpecs } from './validate.js';
-export { generateApp, checkGenerate, checkBindings, checkServiceSecrets, checkNetworkInBodies, checkTokenOverrides, tokenOverrides, tokensFile, layoutFile, liveRouteFile, selfCheck, GenerateError, EMITTERS } from './generate.js';
+export { generateApp, checkGenerate, checkBindings, checkNetworkInBodies, checkTokenOverrides, tokenOverrides, tokensFile, layoutFile, liveRouteFile, selfCheck, GenerateError, EMITTERS } from './generate.js';
 export { indexBody, unitFlow, buildModuleFlow, emitFlow, flowApp, flowDelta } from './flow.js';
 export { wranglerConfig, wranglerFile } from './emit-wrangler.js';
 export { emitModuleMachines, machinesEmitter } from './emit-machines.js';

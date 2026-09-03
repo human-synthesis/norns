@@ -84,13 +84,13 @@ describe('legacy Route removal (D69)', () => {
 	});
 });
 
-describe('endpoint secrets guard', () => {
-	test('a literal secret in an endpoint is a SECRET_IN_SPEC refusal', () => {
+describe('endpoint generate checks', () => {
+	// D83: literal values in a unit are the author's call — no secret scan.
+	test('a token-shaped literal in an endpoint example is not refused', () => {
 		const ep = structuredClone(WEBHOOK);
-		// Stripe's public docs example key, split so secret scanners don't flag the fixture.
 		ep.examples = [{ input: { key: 'sk_live_' + '4eC39HqLyjWDarjtT1zdp7dc' }, expect: { ok: true } }];
 		const refusals = checkGenerate(specsOf({ deals: { module: 'deals', endpoints: { webhookStripe: ep } } }));
-		expect(refusals.some((r) => r.code === 'SECRET_IN_SPEC')).toBe(true);
+		expect(refusals.some((r) => r.code === 'SECRET_IN_SPEC')).toBe(false);
 	});
 
 	test('binding names alone are clean', () => {

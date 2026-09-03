@@ -5,7 +5,7 @@ import * as dz from 'drizzle-orm'
 import { Order } from './schema.c'
 import { OrderPolicy } from './policies.c'
 
-ops := { 'and': dz.and, 'or': dz.or, 'not': dz.not, eq: dz.eq, ne: dz.ne, lt: dz.lt, lte: dz.lte, gt: dz.gt, gte: dz.gte, inArray: dz.inArray, bool: (b) => b ? dz.sql`1 = 1` : dz.sql`1 = 0` }
+ops := { 'and': dz.and, 'or': dz.or, 'not': dz.not, eq: dz.eq, ne: dz.ne, lt: dz.lt, lte: dz.lte, gt: dz.gt, gte: dz.gte, inArray: dz.inArray, isNull: dz.isNull, isNotNull: dz.isNotNull, bool: (b) => b ? dz.sql`1 = 1` : dz.sql`1 = 0` }
 
 groupRows := (rows, key) => {
 	const out = {}

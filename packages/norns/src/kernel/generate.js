@@ -12,7 +12,7 @@
  * only path.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 
@@ -93,9 +93,6 @@ export function checkGenerate(specs, opts = {}) {
 					});
 				}
 			}
-			if (unit.kind === 'Service' || unit.kind === 'Endpoint') {
-				refusals.push(...checkServiceSecrets(unit));
-			}
 			if (unit.kind === 'Query') {
 				const q = unit.value;
 				if (q && typeof q === 'object' && !q.live && !q.groupBy && q.limit === undefined) {
@@ -108,70 +105,6 @@ export function checkGenerate(specs, opts = {}) {
 					});
 				}
 			}
-		}
-	}
-	return refusals;
-}
-
-const SECRET_SHAPE_RE =
-	/(?:^|[^A-Za-z0-9])(?:sk|pk|rk)_(?:live|test|prod)_[A-Za-z0-9]{8,}|^(?:ghp|gho|github_pat)_|^xox[a-z]-|^AKIA[0-9A-Z]{12}|^eyJ[A-Za-z0-9_-]{10,}/;
-
-/** Token-shaped: known prefixes, or long spaceless mixed-class strings that are not URLs. */
-function looksLikeSecret(s) {
-	if (typeof s !== 'string') return false;
-	if (SECRET_SHAPE_RE.test(s)) return true;
-	return (
-		s.length >= 32 &&
-		!/\s/.test(s) &&
-		/[A-Z]/.test(s) &&
-		/[a-z]/.test(s) &&
-		/[0-9]/.test(s) &&
-		!/^https?:\/\//.test(s)
-	);
-}
-
-function* stringLeaves(value, path = '') {
-	if (typeof value === 'string') yield [path, value];
-	else if (value && typeof value === 'object') {
-		for (const [k, child] of Object.entries(value)) {
-			yield* stringLeaves(child, path ? `${path}.${k}` : k);
-		}
-	}
-}
-
-/**
- * D15: credentials never in spec. Refuses userinfo/query params in a
- * service base URL and any token-shaped literal anywhere in the unit —
- * `auth.binding` is a binding *name*; the value lives in the environment
- * (`wrangler secret put`).
- *
- * @param {{ address: string, value: * }} unit a Service unit
- * @returns {Refusal[]}
- */
-export function checkServiceSecrets(unit) {
-	/** @type {Refusal[]} */
-	const refusals = [];
-	const svc = unit.value ?? {};
-	const push = (path, message) =>
-		refusals.push({
-			address: unit.address,
-			path: `${unit.address}.${path}`,
-			code: 'SECRET_IN_SPEC',
-			message,
-			fix: 'keep only an UPPER_SNAKE binding name in spec and set the value with `wrangler secret put`'
-		});
-	if (typeof svc.base === 'string') {
-		try {
-			const u = new URL(svc.base);
-			if (u.username || u.password) push('base', 'base URL embeds userinfo credentials');
-			if (u.search) push('base', 'base URL embeds query parameters — move keys/tokens to an env binding');
-		} catch {
-			// meta-schema already rejects non-URL bases
-		}
-	}
-	for (const [path, s] of stringLeaves(svc)) {
-		if (path !== 'base' && looksLikeSecret(s)) {
-			push(path, `"${s.slice(0, 8)}…" looks like a literal secret — credentials never go in spec`);
 		}
 	}
 	return refusals;
@@ -316,10 +249,11 @@ const PUG_UNESCAPED_RE = /!\{/;
 const KIND_COLLECTIONS = { Action: 'actions', Job: 'jobs', Function: 'functions', Endpoint: 'endpoints', Worker: 'workers', Route: 'routes' };
 
 /**
- * K-35/D35: close the escape hatches UNDECLARED_NETWORK left open —
- * token-shaped string literals in custom bodies (SECRET_IN_BODY), raw SQL
- * without a declared `raw-sql` capability (RAW_SQL), and unescaped Pug
- * interpolation in custom `.n` snippet templates (PUG_UNESCAPED).
+ * K-35/D35: close the escape hatches UNDECLARED_NETWORK left open — raw SQL
+ * without a declared `raw-sql` capability (RAW_SQL) and unescaped Pug
+ * interpolation in custom `.n` snippet templates (PUG_UNESCAPED). (The
+ * token-shaped-literal scan went with D83 — what a body holds is the
+ * author's call.)
  *
  * @param {{ dir?: string, modules: Record<string, *> }} specs
  * @returns {Refusal[]}
@@ -334,18 +268,6 @@ export function checkBodyHygiene(specs) {
 			const file = join(appRoot, rel);
 			if (!existsSync(file)) continue;
 			const lines = readFileSync(file, 'utf-8').split('\n');
-			const secretAt = lines.findIndex((line) =>
-				[...line.matchAll(/'([^']*)'|"([^"]*)"/g)].some((m) => looksLikeSecret(m[1] ?? m[2]))
-			);
-			if (secretAt !== -1) {
-				refusals.push({
-					address,
-					path: `${rel}:${secretAt + 1}`,
-					code: 'SECRET_IN_BODY',
-					message: `custom body holds a token-shaped literal at ${rel}:${secretAt + 1}`,
-					fix: 'read secrets from the env binding named in spec (wrangler secret put), never a literal'
-				});
-			}
 			const kind = address.split('.')[1];
 			const unit = spec[KIND_COLLECTIONS[kind]]?.[address.split('.')[2]];
 			const allowed = Array.isArray(unit?.capabilities) && unit.capabilities.includes('raw-sql');
@@ -958,6 +880,61 @@ export function tokensFile(overrides) {
 	};
 }
 
+/**
+ * K-56/D78: remove files a previous run emitted that this run did not — a
+ * renamed page's old route, a dropped live route, a deleted module's tree.
+ * Only paths recorded in the cache are ever touched; anything else under
+ * the output tree is left alone. Emptied directories go with them.
+ */
+function pruneStale(outRoot, priorFiles, files) {
+	const keep = new Set(Object.values(files).flat());
+	for (const rel of Object.values(priorFiles).flat()) {
+		if (keep.has(rel)) continue;
+		const full = join(outRoot, rel);
+		if (!existsSync(full)) continue;
+		rmSync(full);
+		let dir = dirname(full);
+		while (dir !== outRoot && dir.startsWith(outRoot) && existsSync(dir) && readdirSync(dir).length === 0) {
+			rmSync(dir, { recursive: true });
+			dir = dirname(dir);
+		}
+	}
+}
+
+/**
+ * K-60/D85: wrangler wants one flat, numbered migrations directory that it
+ * tracks in its own `d1_migrations` table; norns keeps drizzle-kit output per
+ * module under `migrations/<module>/`. Mirror every module migration into
+ * `.norns/generated/migrations/NNNN_<module>_<name>.sql` so
+ * `wrangler d1 migrations apply` is true. Numbers persist in the cache —
+ * a mirrored file never renumbers; new sources append.
+ */
+function mirrorMigrations(appRoot, outRoot, cache, written) {
+	const srcRoot = join(appRoot, 'migrations');
+	if (!existsSync(srcRoot)) return;
+	const numbers = cache.migrations ?? {};
+	let next = Object.values(numbers).reduce((m, n) => Math.max(m, Number(n) + 1), 0);
+	const modules = readdirSync(srcRoot, { withFileTypes: true })
+		.filter((d) => d.isDirectory())
+		.map((d) => d.name)
+		.sort();
+	for (const moduleName of modules) {
+		const dir = join(srcRoot, moduleName);
+		for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+			const key = `${moduleName}/${file}`;
+			if (numbers[key] === undefined) numbers[key] = String(next++).padStart(4, '0');
+			const target = `migrations/${numbers[key]}_${moduleName}_${file.replace(/^\d+_/, '')}`;
+			const full = join(outRoot, target);
+			const text = readFileSync(join(dir, file), 'utf-8');
+			if (existsSync(full) && readFileSync(full, 'utf-8') === text) continue;
+			mkdirSync(dirname(full), { recursive: true });
+			writeFileSync(full, text);
+			written.push(target);
+		}
+	}
+	cache.migrations = numbers;
+}
+
 function readCache(file) {
 	try {
 		return JSON.parse(readFileSync(file, 'utf-8'));
@@ -998,20 +975,28 @@ export function generateApp(dir, opts = {}) {
 	});
 	if (refusals.length > 0) throw new GenerateError(refusals);
 
-	const cache = opts.force ? { moduleHashes: {} } : readCache(cacheFile);
+	const prior = readCache(cacheFile);
+	const cache = opts.force ? { moduleHashes: {}, ...(prior.migrations ? { migrations: prior.migrations } : {}) } : prior;
 	const graph = buildGraph(specs.modules);
 	const written = [];
 	const skipped = [];
 	const pending = [];
+	// K-56/D78: every path this generator owns, per module (+ '@app'), so a
+	// later run can remove what it no longer emits.
+	const files = {};
 
 	for (const [moduleName, moduleSpec] of Object.entries(specs.modules)) {
 		if (cache.moduleHashes[moduleName] === specs.hashes[moduleName]) {
 			skipped.push(moduleName);
+			files[moduleName] = prior.files?.[moduleName] ?? [];
 			continue;
 		}
+		const emitted = [];
 		for (const emitter of EMITTERS) {
-			pending.push(...emitter.emit({ moduleName, moduleSpec, specs, graph }));
+			emitted.push(...emitter.emit({ moduleName, moduleSpec, specs, graph }));
 		}
+		pending.push(...emitted);
+		files[moduleName] = emitted.map((f) => f.path);
 		cache.moduleHashes[moduleName] = specs.hashes[moduleName];
 	}
 
@@ -1019,16 +1004,18 @@ export function generateApp(dir, opts = {}) {
 	// (name, dialect, cloudflare settings), so refresh it whenever anything
 	// re-emitted, the app spec itself changed, or it's missing entirely.
 	const appChanged = cache.appHash !== specs.hashes.app;
+	const workerEntry = workerEntryFile(specs);
+	const appFiles = ['wrangler.json', ...(workerEntry ? [workerEntry.path] : [])];
 	if (pending.length > 0 || appChanged || !existsSync(join(outRoot, 'wrangler.json'))) {
 		pending.push(wranglerFile(specs));
 		// The wrangler config's ROOM binding names a Durable Object class —
 		// the entry that exports it is emitted with it, or deploy is DOA (v6 K-44).
-		const workerEntry = workerEntryFile(specs);
 		if (workerEntry) pending.push(workerEntry);
 	}
 	cache.appHash = specs.hashes.app;
 
 	// App-level: the live SSE route exists iff any query is live.
+	if (hasLiveQueries(specs)) appFiles.push('routes/_norns/live/+server.c');
 	if (
 		hasLiveQueries(specs) &&
 		(pending.length > 0 || !existsSync(join(outRoot, 'routes', '_norns', 'live', '+server.c')))
@@ -1038,11 +1025,13 @@ export function generateApp(dir, opts = {}) {
 
 	// App-level: token overrides from `app.settings.tokens` (U-10).
 	const overrides = tokenOverrides(specs);
+	if (overrides) appFiles.push('routes/tokens.css');
 	if (overrides && (pending.length > 0 || !existsSync(join(outRoot, 'routes', 'tokens.css')))) {
 		pending.push(tokensFile(overrides));
 	}
 
 	// App-level: a root layout so generated routes render inside a shell.
+	appFiles.push('routes/+layout.svelte');
 	if (pending.length > 0 || !existsSync(join(outRoot, 'routes', '+layout.svelte'))) {
 		pending.push(layoutFile(specs, existsSync(join(appRoot, 'src', 'app.css')), Boolean(overrides)));
 	}
@@ -1054,6 +1043,7 @@ export function generateApp(dir, opts = {}) {
 			path: 'lib/app/settings.c',
 			text: `// GENERATED by \`norns generate\` — do not edit.\n\nexport SETTINGS := ${JSON.stringify(specs.app.settings, null, '\t')}\n`
 		};
+		appFiles.push(settingsFile.path);
 		const current = join(outRoot, settingsFile.path);
 		if (!existsSync(current) || readFileSync(current, 'utf-8') !== settingsFile.text) {
 			pending.push(settingsFile);
@@ -1072,6 +1062,10 @@ export function generateApp(dir, opts = {}) {
 	for (const name of Object.keys(cache.moduleHashes)) {
 		if (!(name in specs.modules)) delete cache.moduleHashes[name];
 	}
+	files['@app'] = appFiles;
+	pruneStale(outRoot, prior.files ?? {}, files);
+	cache.files = files;
+	mirrorMigrations(appRoot, outRoot, cache, written);
 
 	const manifest = {
 		version: specs.version,

@@ -95,7 +95,11 @@ export function wranglerConfig(specs) {
 			{
 				binding: 'DB',
 				database_name: `${name}-db`,
-				database_id: cf.d1_id ?? '<set app.settings.cloudflare.d1_id>'
+				database_id: cf.d1_id ?? '<set app.settings.cloudflare.d1_id>',
+				// K-60/D85: generate mirrors migrations/<module>/*.sql into a flat,
+				// numbered dir next to this config so `wrangler d1 migrations apply`
+				// finds and tracks them.
+				migrations_dir: 'migrations'
 			}
 		];
 	}

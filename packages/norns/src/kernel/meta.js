@@ -216,9 +216,8 @@ const Snippet = v.strictObject({
 });
 
 // Service (D15) — an external system as a typed operation manifest.
-// Credentials never appear here: `auth.binding` is an env binding *name*
-// (UPPER_SNAKE); a literal secret anywhere in a service is refused at
-// generate time (SECRET_IN_SPEC, generate.js).
+// `auth.binding` is an env binding *name* (UPPER_SNAKE) the generated client
+// reads the credential from at call time.
 const bindingName = v.pipe(
 	v.string(),
 	v.regex(/^[A-Z][A-Z0-9_]*$/, 'must be an UPPER_SNAKE env binding name, never a secret value')

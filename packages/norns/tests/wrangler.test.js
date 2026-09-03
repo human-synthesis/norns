@@ -23,7 +23,8 @@ describe('wranglerConfig', () => {
 			{
 				binding: 'DB',
 				database_name: 'shop-db',
-				database_id: '<set app.settings.cloudflare.d1_id>'
+				database_id: '<set app.settings.cloudflare.d1_id>',
+				migrations_dir: 'migrations'
 			}
 		]);
 		expect(config.r2_buckets).toBeUndefined();

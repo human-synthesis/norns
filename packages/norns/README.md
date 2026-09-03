@@ -223,7 +223,7 @@ bun run migrate status                     # list applied + pending
 
 Migration files live at `<project>/migrations/<feature>/*.sql`. The CLI tracks applied migrations in a `norns_migrations` table.
 
-v1 supports SQLite via `better-sqlite3`. For Cloudflare D1 use `wrangler d1 migrations apply`. Postgres / libSQL via the CLI are planned.
+v1 supports SQLite via `better-sqlite3`. For Cloudflare D1, `norns generate` mirrors every module's migrations into `.norns/generated/migrations/NNNN_<module>_<name>.sql` (the flat, numbered layout wrangler tracks in its own table) and points the generated `wrangler.json` at it, so `wrangler d1 migrations apply <db> --remote` applies them. Postgres / libSQL via the CLI are planned.
 
 ## Drivers
 

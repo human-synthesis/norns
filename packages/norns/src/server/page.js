@@ -70,7 +70,7 @@ export const page = {
 				let raw = null;
 				let input;
 				if (def.input !== undefined) {
-					raw = await readForm(event.request);
+					raw = coerceForm(def.input, await readForm(event.request));
 					try {
 						input = validate(def.input, raw);
 					} catch (e) {
@@ -93,6 +93,44 @@ export const page = {
 		return out;
 	}
 };
+
+/** The schema an optional/nullable wrapper wraps, down to the base. */
+function baseSchema(schema) {
+	let s = schema;
+	while (s && (s.type === 'optional' || s.type === 'nullable' || s.type === 'nullish' || s.type === 'undefinedable')) {
+		s = s.wrapped;
+	}
+	return s;
+}
+
+/**
+ * K-58/D78: a form posts strings, the declared input wants numbers and
+ * booleans — `v.number()` refused every browser-submitted amount and
+ * `v.boolean()` every checkbox. Coerce by the declared shape before
+ * validation: numeric strings → numbers, checkbox `on`/`true`/`false` →
+ * booleans, a declared-but-absent required boolean → false (an unchecked
+ * checkbox submits nothing). Anything that isn't a clean conversion stays
+ * as sent, so validation still names it.
+ *
+ * @param {*} schema the action's valibot input schema
+ * @param {*} raw form entries
+ */
+function coerceForm(schema, raw) {
+	if (!raw || typeof raw !== 'object' || !schema?.entries) return raw;
+	for (const [key, entry] of Object.entries(schema.entries)) {
+		const type = baseSchema(entry)?.type;
+		const value = raw[key];
+		if (type === 'number') {
+			if (typeof value === 'string' && value !== '' && !Number.isNaN(Number(value))) raw[key] = Number(value);
+			else if (value === '' && entry.type === 'optional') delete raw[key];
+		} else if (type === 'boolean') {
+			if (value === 'on' || value === 'true') raw[key] = true;
+			else if (value === 'off' || value === 'false' || value === '') raw[key] = false;
+			else if (value === undefined && entry.type !== 'optional') raw[key] = false;
+		}
+	}
+	return raw;
+}
 
 /**
  * Read form-encoded body into a plain object. Designed for `actions` —

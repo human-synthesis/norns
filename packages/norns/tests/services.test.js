@@ -111,42 +111,13 @@ describe('refine: service call steps', () => {
 	});
 });
 
-describe('SECRET_IN_SPEC (checkGenerate)', () => {
-	const secretRefusals = (svc) => {
-		const crm = { module: 'crm', services: { mailer: svc } };
-		return checkGenerate(specsOf({ crm })).filter((r) => r.code === 'SECRET_IN_SPEC');
-	};
-
-	test('a clean service produces no refusals', () => {
-		expect(secretRefusals(structuredClone(MAILER))).toEqual([]);
-	});
-
-	test('query params in the base URL are refused', () => {
-		const svc = structuredClone(MAILER);
-		svc.base = 'https://api.mailer.example?key=abc';
-		const refusals = secretRefusals(svc);
-		expect(refusals.length).toBe(1);
-		expect(refusals[0].path).toBe('crm.Service.mailer.base');
-	});
-
-	test('userinfo in the base URL is refused', () => {
-		const svc = structuredClone(MAILER);
-		svc.base = 'https://user:hunter2@api.mailer.example';
-		expect(secretRefusals(svc).length).toBe(1);
-	});
-
-	test('token-shaped literals anywhere in the unit are refused', () => {
+describe('service literals (D83)', () => {
+	// The secret scan is gone: what a service unit holds is the author's call.
+	test('a token-shaped literal in a service is not refused', () => {
 		const svc = structuredClone(MAILER);
 		svc.operations.send.path = '/send?token=sk_live_ABCdefGH12345678';
-		const refusals = secretRefusals(svc);
-		expect(refusals.length).toBe(1);
-		expect(refusals[0].path).toContain('operations.send.path');
-	});
-
-	test('long mixed-class spaceless strings are refused', () => {
-		const svc = structuredClone(MAILER);
-		svc.operations.send.path = '/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF';
-		expect(secretRefusals(svc).length).toBe(1);
+		const crm = { module: 'crm', services: { mailer: svc } };
+		expect(checkGenerate(specsOf({ crm })).filter((r) => r.code === 'SECRET_IN_SPEC')).toEqual([]);
 	});
 });
 

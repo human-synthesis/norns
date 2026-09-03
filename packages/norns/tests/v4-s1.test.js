@@ -106,7 +106,8 @@ describe('D35 body hygiene (K-35)', () => {
 			}
 		};
 		const codes = checkBodyHygiene(specs).map((r) => r.code).sort();
-		expect(codes).toEqual(['PUG_UNESCAPED', 'RAW_SQL', 'SECRET_IN_BODY']);
+		// D83: the token-shaped-literal scan is gone — bodies hold what their author wrote.
+		expect(codes).toEqual(['PUG_UNESCAPED', 'RAW_SQL']);
 	});
 
 	test("capabilities: ['raw-sql'] lets a declared unit through", () => {
