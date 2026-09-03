@@ -364,17 +364,27 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 			entityImports.set(entity, `${local}schema.c`);
 			const entitySpec = specs.modules[module]?.entities?.[entity];
 			const policy = policyFor(specs, module, entity);
-			const valueExpr = (v) => {
+			// K-51: date/datetime columns are drizzle `mode: 'timestamp'` and
+			// require a real Date — the validated input is an ISO *string*, so
+			// coerce here or every declarative date write throws
+			// `value.getTime is not a function` at the insert.
+			const isDateField = (field) => {
+				const type = normalizeField(entitySpec?.fields?.[field] ?? 'text').type;
+				return type === 'date' || type === 'datetime';
+			};
+			const valueExpr = (v, field) => {
 				if (v === '$user') return 'user?.id';
 				if (v === '$initial') {
 					return JSON.stringify(entitySpec?.status ? initialState(entitySpec.status, entitySpec.initial) : null);
 				}
-				if (typeof v === 'string' && v.startsWith('input.')) return v;
-				return JSON.stringify(v);
+				if (typeof v === 'string' && v.startsWith('input.')) {
+					return isDateField(field) ? `(${v} === undefined ? undefined : new Date(${v}))` : v;
+				}
+				return isDateField(field) && typeof v === 'string' ? `new Date(${JSON.stringify(v)})` : JSON.stringify(v);
 			};
 			const parts = ['id: crypto.randomUUID()'];
 			for (const field of Object.keys(createStep.create.values ?? {}).sort()) {
-				parts.push(`${field}: ${valueExpr(createStep.create.values[field])}`);
+				parts.push(`${field}: ${valueExpr(createStep.create.values[field], field)}`);
 			}
 			body.push(`\t\tconst db = container.resolve('db')`, `\t\tconst values = { ${parts.join(', ')} }`);
 			if (policy?.write !== undefined) {
@@ -434,9 +444,20 @@ export function emitModuleActions(moduleName, moduleSpec, specs) {
 			for (const step of custom ? [] : (action.steps ?? [])) {
 				if (step.set) {
 					const { entity: setEntity, ...fields } = step.set;
+					// K-51: same Date coercion as create steps — a literal date
+					// string written to a timestamp column must arrive as a Date.
+					const setEntitySpec = specs.modules[module]?.entities?.[entity];
+					const setIsDate = (f) => {
+						const type = normalizeField(setEntitySpec?.fields?.[f] ?? 'text').type;
+						return type === 'date' || type === 'datetime';
+					};
 					const sets = Object.keys(fields)
 						.sort()
-						.map((f) => `${f}: ${JSON.stringify(fields[f])}`);
+						.map((f) =>
+							setIsDate(f) && typeof fields[f] === 'string'
+								? `${f}: new Date(${JSON.stringify(fields[f])})`
+								: `${f}: ${JSON.stringify(fields[f])}`
+						);
 					// K-17: a status write must be a legal edge of the entity's
 					// machine, independent of any authored `requires` guard.
 					if ('status' in fields && statesOf(specs, module, entity).size > 0) {

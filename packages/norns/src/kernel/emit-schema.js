@@ -92,7 +92,12 @@ export const VALIBOT = {
 	number: 'v.number()',
 	bool: 'v.boolean()',
 	date: 'v.pipe(v.string(), v.isoDate())',
-	datetime: 'v.pipe(v.string(), v.isoTimestamp())',
+	// K-52: a native <input type="datetime-local"> submits local time with NO
+	// timezone suffix (2026-09-04T09:00[:00]) — by spec it cannot send one, so
+	// isoTimestamp alone made every browser-submitted datetime invalid. Accept
+	// local forms and full instants alike; K-51 coerces through new Date().
+	datetime:
+		"v.pipe(v.string(), v.regex(/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,3})?)?(?:Z|[+-]\\d{2}:?\\d{2})?$/, 'expected an ISO datetime, e.g. 2026-09-04T09:00 (seconds/offset optional)'))",
 	json: 'v.unknown()'
 };
 

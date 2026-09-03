@@ -479,5 +479,46 @@ export function refineSpecs(specs) {
 		}
 	}
 
+	// K-53: an Action bound to no Page, Component event, or Trigger has no
+	// HTTP route at all — SvelteKit only registers ?/name for actions a
+	// page's own `actions()` export references, so an unwired action is
+	// invisible at the HTTP level, not merely missing from the UI. Sweep
+	// every spec-level string for each action's address (its own module's
+	// actions and policies subtrees excluded: intra-action mentions and
+	// policy run-guards are not invocations). Custom bodies are not scanned
+	// — but a custom page cannot reach an unbound action either, so the
+	// warning stands.
+	{
+		// Only meaningful when the app has a route surface at all — a headless
+		// spec (jobs/triggers/endpoints, no pages yet) invokes actions without
+		// page bindings, and flagging every action there is noise.
+		const hasPages = Object.values(modules).some((m) => Object.keys(m?.pages ?? {}).length > 0);
+		const referenced = new Set();
+		const sweep = (value) => {
+			if (typeof value === 'string') {
+				if (isAddress(value) && parseAddress(value).kind === 'Action') referenced.add(value);
+				return;
+			}
+			if (Array.isArray(value)) for (const item of value) sweep(item);
+			else if (value && typeof value === 'object') for (const item of Object.values(value)) sweep(item);
+		};
+		for (const moduleSpec of Object.values(modules)) {
+			const { actions: _actions, policies: _policies, ...rest } = moduleSpec ?? {};
+			sweep(rest);
+		}
+		for (const [mod, moduleSpec] of Object.entries(modules)) {
+			for (const name of Object.keys(moduleSpec?.actions ?? {})) {
+				if (!hasPages) break;
+				const address = `${mod}.Action.${name}`;
+				if (referenced.has(address)) continue;
+				issues.push({
+					level: 'warning',
+					address,
+					message: `action is wired to no Page, Component event, or Trigger — no ?/${name} route will exist, so it is unreachable over HTTP; bind it or remove it`
+				});
+			}
+		}
+	}
+
 	return issues;
 }

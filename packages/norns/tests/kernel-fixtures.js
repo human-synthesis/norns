@@ -63,7 +63,7 @@ export const ORDERS = {
 		}
 	},
 	components: {
-		OrderTimeline: { props: { order: 'Order' }, events: { select: 'orders.Action.open' } }
+		OrderTimeline: { props: { order: 'Order' }, events: { select: 'orders.Action.open', reprice: 'orders.Action.price' } }
 	},
 	triggers: { 'catalog.Product.deleted': 'orders.Action.cancelLineItems' }
 };

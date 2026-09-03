@@ -35,6 +35,22 @@ describe('refineSpecs', () => {
 		expect(messages(refineSpecs(specs))).toContain('owner "ghost"');
 	});
 
+	// K-53 — session-v2 finding 08: an action declared in Phase 1 and never
+	// bound to any page was invisible at the HTTP level (bare 404), silently.
+	test('an action wired to no page/component/trigger warns; headless specs stay silent', () => {
+		const specs = clone();
+		specs.modules.orders.actions.orphan = { input: { id: 'Order.id' } };
+		const issues = refineSpecs(specs);
+		const warning = issues.find((i) => i.address === 'orders.Action.orphan');
+		expect(warning?.level).toBe('warning');
+		expect(warning?.message).toContain('?/orphan');
+		// every fixture action that IS wired stays silent
+		expect(issues.filter((i) => i.message.includes('wired to no'))).toHaveLength(1);
+		// no pages anywhere -> no route surface -> the sweep is noise, stays off
+		specs.modules.orders.pages = {};
+		expect(refineSpecs(specs).filter((i) => i.message.includes('wired to no'))).toEqual([]);
+	});
+
 	// v6 K-42 — the report's finding 02: a cyclic machine silently defaulted
 	// new rows to whatever state sorted first.
 	test('a cyclic status machine without `initial` is INITIAL_AMBIGUOUS', () => {

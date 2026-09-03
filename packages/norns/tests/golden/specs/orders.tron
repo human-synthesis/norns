@@ -2,7 +2,10 @@
   "module": "orders",
   "depends": ["core", "catalog"],
   "components": {
-    "OrderTimeline": { "props": { "order": "Order" }, "events": { "select": "orders.Action.open" } }
+    "OrderTimeline": {
+      "props": { "order": "Order" },
+      "events": { "reprice": "orders.Action.price", "select": "orders.Action.open" }
+    }
   },
   "entities": {
     "Order": {

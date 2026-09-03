@@ -137,6 +137,30 @@ describe('emitModuleActions', () => {
 		expect(compiles(out)).toContain('export const quickAdd');
 	});
 
+	// K-51 — session-v2 finding 03: drizzle timestamp columns need a real
+	// Date, but declarative steps passed the validated ISO *string* verbatim,
+	// so every date write threw `value.getTime is not a function`.
+	test('create/set steps coerce date fields through new Date()', () => {
+		const mod = structuredClone(ORDERS);
+		mod.entities.Order.fields.due = { type: 'date', optional: true };
+		mod.actions.schedule = {
+			input: { due: 'Order.due?' },
+			steps: [{ create: { entity: 'Order', values: { customer: '$user', due: 'input.due', status: '$initial' } } }],
+			examples: [{ input: { due: '2026-09-10' } }]
+		};
+		mod.actions.slip = {
+			input: { id: 'Order.id' },
+			steps: [{ set: { entity: 'Order', due: '2026-12-31' } }],
+			examples: [{ input: { id: '$draft' } }]
+		};
+		const out = emitModuleActions('orders', mod, { app: APP, modules: { orders: mod, catalog: CATALOG } });
+		expect(out.text).toContain('due: (input.due === undefined ? undefined : new Date(input.due))');
+		expect(out.text).toContain('due: new Date("2026-12-31")');
+		// non-date fields stay verbatim
+		expect(out.text).toContain('customer: user?.id');
+		expect(compiles(out)).toContain('export const schedule');
+	});
+
 	test('impl: custom actions emit guard-first shells delegating to $custom', () => {
 		expect(file.text).toContain(`import priceBody from '$custom/orders/actions/price.c'`);
 		const shell = file.text.slice(file.text.indexOf('export price'), file.text.indexOf('export submit'));

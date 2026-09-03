@@ -56,6 +56,25 @@ describe('checkBindings (U-02)', () => {
 		expect(checkBindings(specs, CONTRACTS)).toHaveLength(1);
 	});
 
+	// K-50: TRON sorts keys on write, so with two same-kind address keys the
+	// tag pick would be alphabetical luck — refuse instead of guessing.
+	test('two Query-address keys are refused as ambiguous, not silently picked', () => {
+		const specs = specsWith([{ rows: 'crm.Query.listDeals', simpleTable: 'crm.Query.listDeals' }]);
+		const [r] = checkBindings(specs, CONTRACTS);
+		expect(r.code).toBe('AMBIGUOUS_COMPONENT');
+		expect(r.message).toContain('rows');
+		expect(r.message).toContain('simpleTable');
+		expect(r.fix).toContain('component:');
+	});
+
+	test('two Action-address keys with no Query are ambiguous too; one of each is fine', () => {
+		const two = specsWith([{ form: 'crm.Action.createDeal', other: 'crm.Action.reprice' }]);
+		expect(checkBindings(two, CONTRACTS)[0]?.code).toBe('AMBIGUOUS_COMPONENT');
+		// one Query + one Action = the Kanban/onMove pattern — never ambiguous
+		const mixed = specsWith([{ table: 'crm.Query.listDeals', onMove: 'crm.Action.reprice' }]);
+		expect(checkBindings(mixed, CONTRACTS).filter((r) => r.code === 'AMBIGUOUS_COMPONENT')).toEqual([]);
+	});
+
 	test('tags without a contract are left alone (custom components)', () => {
 		const specs = specsWith([{ dealChart: 'crm.Query.listDeals', anything: 'goes' }]);
 		expect(checkBindings(specs, CONTRACTS)).toEqual([]);

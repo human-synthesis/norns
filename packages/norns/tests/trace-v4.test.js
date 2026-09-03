@@ -24,7 +24,11 @@ function appDir(orders) {
 // The shared fixture minus the custom-body action, so no src/ tree is needed.
 function orders(overrides = {}) {
 	const { price: _price, ...actions } = ORDERS.actions;
-	return { ...ORDERS, actions, ...overrides };
+	// price is stripped, so its OrderTimeline event must go too (K-53 wires it
+	// in the base fixture to keep every fixture action reachable).
+	const components = structuredClone(ORDERS.components);
+	delete components.OrderTimeline.events.reprice;
+	return { ...ORDERS, actions, components, ...overrides };
 }
 
 afterAll(() => {

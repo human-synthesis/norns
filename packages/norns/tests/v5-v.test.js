@@ -25,7 +25,11 @@ function appDir(orders, app = APP) {
 
 function orders(actions) {
 	const { price: _price, ...base } = ORDERS.actions;
-	return { ...structuredClone(ORDERS), actions: { ...structuredClone(base), ...actions } };
+	const spec = structuredClone(ORDERS);
+	// price is stripped above, so its OrderTimeline event must go too (K-53
+	// wires it in the base fixture to keep every fixture action reachable).
+	delete spec.components.OrderTimeline.events.reprice;
+	return { ...spec, actions: { ...structuredClone(base), ...actions } };
 }
 
 describe('create step (K-39/D44)', () => {

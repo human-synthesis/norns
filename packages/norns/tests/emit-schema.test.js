@@ -2,8 +2,25 @@ import { describe, expect, test } from 'bun:test';
 
 import { compile } from '@danielx/civet';
 
-import { emitModuleSchema, initialState } from '../src/kernel/emit-schema.js';
+import { VALIBOT, emitModuleSchema, initialState } from '../src/kernel/emit-schema.js';
 import { ORDERS } from './kernel-fixtures.js';
+
+import * as v from 'valibot';
+
+// K-52 — session-v2 finding 05: isoTimestamp demands a timezone suffix a
+// native <input type="datetime-local"> can never send, making every
+// browser-submitted datetime invalid as declared.
+describe('datetime validator (K-52)', () => {
+	const schema = new Function('v', `return ${VALIBOT.datetime}`)(v);
+	test('accepts datetime-local forms and full instants alike', () => {
+		for (const ok of ['2026-09-04T09:00', '2026-09-04T09:00:00', '2026-09-04T09:00:00.123Z', '2026-09-04T09:00:00+02:00']) {
+			expect(v.safeParse(schema, ok).success).toBe(true);
+		}
+		for (const bad of ['2026-09-04', '09:00', 'junk', '2026-09-04T9:00']) {
+			expect(v.safeParse(schema, bad).success).toBe(false);
+		}
+	});
+});
 
 describe('emitModuleSchema', () => {
 	const file = emitModuleSchema('orders', ORDERS);

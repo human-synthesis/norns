@@ -51,6 +51,11 @@
 	},
 	{
 		"from": "orders.Component.OrderTimeline",
+		"to": "orders.Action.price",
+		"type": "calls"
+	},
+	{
+		"from": "orders.Component.OrderTimeline",
 		"to": "orders.Action.open",
 		"type": "calls"
 	}

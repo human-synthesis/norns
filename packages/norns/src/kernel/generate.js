@@ -402,6 +402,31 @@ export function checkBindings(specs, contracts) {
 			(page.components ?? []).forEach((entry, i) => {
 				const keys = Object.keys(entry);
 				if (keys.length === 0) return;
+				// K-50: the tag key is recovered semantically (Query wins, then
+				// Action) because TRON sorts record keys on write — but two keys
+				// of the SAME winning kind make the pick alphabetical luck, and a
+				// wrong pick emits a tag for a component that does not exist.
+				// Refuse the ambiguity instead of silently guessing.
+				if (typeof entry.component !== 'string') {
+					const kindKeys = (kind) =>
+						keys.filter((k) => {
+							const val = entry[k];
+							return typeof val === 'string' && isAddress(val) && parseAddress(val).kind === kind;
+						});
+					const queryKeys = kindKeys('Query');
+					const ambiguous =
+						queryKeys.length > 1 ? queryKeys : queryKeys.length === 0 ? kindKeys('Action') : [];
+					if (ambiguous.length > 1) {
+						refusals.push({
+							address: `${moduleName}.Page.${pageName}`,
+							path: `${moduleName}.Page.${pageName}.components[${i}]`,
+							code: 'AMBIGUOUS_COMPONENT',
+							message: `component entry has ${ambiguous.length} keys that could each be the tag (${ambiguous.join(', ')}) — keys are sorted on write, so the pick would be alphabetical, not intentional`,
+							fix: 'keep exactly one Query/Action-address key as the tag; pass extra data to a custom Component via `component:` + `with:` instead of a second address key'
+						});
+						return;
+					}
+				}
 				const first = componentKey(entry);
 				const rest = keys.filter((k) => k !== first);
 				const tag = first[0].toUpperCase() + first.slice(1);
