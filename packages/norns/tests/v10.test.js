@@ -218,6 +218,28 @@ describe('T-02 authHandle accepts a per-request factory (D86)', () => {
 	});
 });
 
+describe('D87 blank-state page for a page-less app', () => {
+	test('the clean starter answers / until the first spec Page exists', () => {
+		const { root, dir, done } = specsDir({ app: { name: 'blank', dialect: 'd1', modules: [] } });
+		try {
+			const out = join(root, '.norns', 'generated');
+			const first = generateApp(dir);
+			expect(first.written).toContain('routes/+page.svelte');
+			expect(readFileSync(join(out, 'routes', '+page.svelte'), 'utf-8')).toContain('No pages yet');
+			expect(generateApp(dir).written).toEqual([]);
+
+			writeSpec(join(dir, 'app.tron'), APP);
+			writeSpec(join(dir, 'orders.tron'), ORDERS);
+			writeSpec(join(dir, 'catalog.tron'), CATALOG);
+			generateApp(dir);
+			expect(existsSync(join(out, 'routes', '+page.svelte'))).toBe(false);
+			expect(existsSync(join(out, 'routes', 'orders', '+page.n'))).toBe(true);
+		} finally {
+			done();
+		}
+	});
+});
+
 describe('K-60 wrangler-shaped migrations', () => {
 	test('module migrations mirror into a flat numbered dir with stable numbers', () => {
 		const { root, dir, done } = specsDir({ app: APP, orders: ORDERS, catalog: CATALOG });
