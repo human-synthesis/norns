@@ -761,7 +761,7 @@ export function nornsAutoImport(options = {}) {
 		// import .svelte), only helpers — and the path-based `match` filter
 		// keeps server-only helpers (e.g. `@human-synthesis/norns/server`)
 		// out of any client `.civet` utility modules.
-		enforce: 'post',
+		enforce: /** @type {'post'} */ ('post'),
 		transform(code, id) {
 			const [path] = id.split('?');
 			if (path.includes('/node_modules/')) return null;
