@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": false,
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"skipLibCheck": true,
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"target": "ES2022",
+		"strict": false,
+		"outDir": "types",
+		"rootDir": "src"
+	},
+	"include": ["src/**/*.js"],
+	"exclude": ["tests", "node_modules"]
+}

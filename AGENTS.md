@@ -1,3 +1,26 @@
+# norns — agent guide
+
+This repo is a fork of `sveltejs/kit`. **Our code is only `packages/norns/`** (`@human-synthesis/norns`: SvelteKit config, Civet Vite plugin, auto-imports, the `/server` runtime layer, migrations, and the `norns` CLI with `lint` / `check` / `diag`). `packages/kit/`, `packages/adapter-*/` and everything else is a pristine upstream mirror — never edit it; every change there is a future merge conflict.
+
+## Working on packages/norns
+
+```sh
+cd packages/norns
+bun test                 # boot, container, page/route wrappers, validate, migrate, vite plugin, auto-import, lint, check
+```
+
+Then smoke against a consumer: `cd ../../../norns-app && bun run lint && bun run check && bun run build` (the workspace symlinks the package; `norns dev` respawns on framework-source changes). This package uses **bun**, not pnpm, and has no build step — `src/` ships as-is.
+
+- `src/server/` is the runtime (DI container, `boot`, `page` / `route` wrappers, Standard Schema validation, db drivers). `src/auto-import.js` resolves helpers, components, presets and opt-in `exportGlobs`. `src/lint.js`, `src/check.js`, `src/diag.js` back the CLI in `bin/norns.js`.
+- JSDoc every export; the types are generated from it. Keep `tests/` green and add a test for every rule or command you add.
+- Bump `version` in `packages/norns/package.json` when behaviour changes. Publishing and pushing are user-gated.
+
+## Upstream part of the repo
+
+The rest of this file is the upstream SvelteKit guide, relevant only after an upstream merge (`git fetch upstream && git merge upstream/main`, then the pnpm commands below).
+
+---
+
 # SvelteKit Coding Agent Guide
 
 This guide is for AI coding agents working in the SvelteKit monorepo.

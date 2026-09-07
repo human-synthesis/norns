@@ -1,6 +1,6 @@
 {
   "name": "@human-synthesis/norns",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "Norns — SvelteKit with Civet, Pug, and the .n / .civet / .c file extensions",
   "license": "MIT",
   "author": "Daniel Teodoroiu (https://humansynthesis.ai)",
@@ -12,21 +12,26 @@
   "files": [
     "src",
     "bin",
+    "types",
     "README.md"
   ],
+  "types": "./types/index.d.ts",
   "bin": {
     "norns": "./bin/norns.js"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "build:types": "tsc -p tsconfig.types.json"
   },
   "exports": {
-    ".": "./src/index.js",
-    "./auto-import": "./src/auto-import.js",
-    "./config": "./src/config.js",
-    "./vite": "./src/vite.js",
-    "./preprocess": "./src/preprocess.js",
-    "./server": "./src/server/index.js",
+    ".": { "types": "./types/index.d.ts", "default": "./src/index.js" },
+    "./auto-import": { "types": "./types/auto-import.d.ts", "default": "./src/auto-import.js" },
+    "./config": { "types": "./types/config.d.ts", "default": "./src/config.js" },
+    "./vite": { "types": "./types/vite.d.ts", "default": "./src/vite.js" },
+    "./preprocess": { "types": "./types/preprocess.d.ts", "default": "./src/preprocess.js" },
+    "./server": { "types": "./types/server/index.d.ts", "default": "./src/server/index.js" },
+    "./check": { "types": "./types/check.d.ts", "default": "./src/check.js" },
+    "./lint": { "types": "./types/lint.d.ts", "default": "./src/lint.js" },
     "./package.json": "./package.json"
   },
   "peerDependencies": {
@@ -36,7 +41,7 @@
   },
   "dependencies": {
     "@danielx/civet": "^0.11.16",
-    "@human-synthesis/norns-core": "^0.0.10"
+    "@human-synthesis/norns-core": "^0.0.11"
   },
   "engines": {
     "node": ">=18"

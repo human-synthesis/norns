@@ -63,7 +63,7 @@ export default defineConfig({
 
 ## Auto-imports
 
-`nornsAutoImport()` returns an object that's both a Svelte preprocessor (for `.n` / `.svelte` files) and a Vite plugin (for standalone `.c` / `.civet` modules). The same instance has all four resolvers: framework helpers, project components, project utilities, and library presets. Wire it in both places — Svelte's compiler ignores the Vite hooks, Vite ignores the Svelte hooks:
+`nornsAutoImport()` returns an object that's both a Svelte preprocessor (for `.n` / `.svelte` files) and a Vite plugin (for standalone `.c` / `.civet` modules). The same instance has all four resolvers: framework helpers, project components, library presets, and (opt-in) project utilities. Wire it in both places — Svelte's compiler ignores the Vite hooks, Vite ignores the Svelte hooks:
 
 ```js
 // svelte.config.js
@@ -75,8 +75,7 @@ export default nornsConfig({
   preprocess: [
     ...nornsPreprocess(),
     nornsAutoImport({
-      componentDirs: ['src/lib/components', 'src/routes'],
-      exportDirs: ['src/lib', 'src/routes']
+      componentDirs: ['src/lib/components', 'src/routes']
     })
   ]
 });
@@ -90,7 +89,7 @@ import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
 export default {
   plugins: [
     nornsCivetPlugin(),
-    nornsAutoImport({ exportDirs: ['src/lib', 'src/routes'] }),
+    nornsAutoImport(),
     sveltekit()
   ]
 };
@@ -103,15 +102,17 @@ export default {
 | Helpers | Hardcoded module-name lists, optionally path-gated | `onMount` from `svelte`, `redirect` from `@sveltejs/kit`, `page` from `$app/state` (client) or `@human-synthesis/norns/server` (server) |
 | Components (dir scan) | Capitalised basenames in `componentDirs` | `<Card>` → `$lib/components/Card.svelte`; `<Game>` → `./Game.n` (route-colocated, importer-relative) |
 | Components (preset map) | Bare-specifier `Record<name, importPath>` from a UI library | `<Btn>` → `'@human-synthesis/norns-ui/components/Btn.n'` (used verbatim) |
-| Project utilities | Named exports (`export const X`, `export X := …`, `export { a, b }`) discovered in `exportDirs` | `notes` from `$lib/notes/server/public`; `scheduleAiMove` from `./ai` (sibling) |
+| Project utilities (opt-in) | Named exports (`export const X`, `export X := …`, `export { a, b }`) found in files matching `exportGlobs` | `notes` from `$lib/notes/server/public` when `exportGlobs: ['src/lib/**/public.c']` |
 
 Resolution priority is **helpers → component dir → component preset → exports**. A name picked up earlier shadows a later match silently — first-match-wins lets you override a library preset by dropping a file under your own `componentDirs`.
+
+`exportGlobs` is **off by default**: project code (facades, schemas, services, stores) is imported explicitly unless you opt in. The recommended opt-in is barrel scope only (`['src/lib/**/public.c']`) so a feature's internals never leak through auto-import. Server-path files (`/server/`, `*.server.*`, `+server.*`, `hooks.server.*`) are never auto-imported into client files, and a name exported from two files in the same scope is logged and excluded. The starter and demo apps do not enable it. (The older `exportDirs` option was replaced by `exportGlobs` in 0.0.11.)
 
 Path emission:
 
 - Files inside `$lib` emit `$lib/...` paths (portable, friendly to the dts file).
 - Files outside `$lib` emit a path relative to the importer.
-- Project-utility paths are stripped of their file extension to match Norns/SvelteKit convention (`'$lib/notes/server/public'`, not `…/public.c`); the configured `extensions` array does the rest.
+- Project-utility paths are stripped of their file extension (`'$lib/notes/server/public'`, not `…/public.c`); the configured `extensions` array does the rest.
 
 Files without a `<script>` block get one prepended automatically when a known component is referenced from markup. Runes (`$state`, `$derived`, `$effect`, `$props`) are Svelte compiler globals — no import needed; the plugin doesn't touch them.
 
@@ -120,7 +121,7 @@ Files without a `<script>` block get one prepended automatically when a known co
 - **Helpers**: `svelte`, `svelte/store`, `@sveltejs/kit`, `$app/state` (non-server paths), `@human-synthesis/norns/server` (server paths only).
 - **Component dirs**: `['src/lib/components']`.
 - **Component extensions**: `['.svelte', '.n']`.
-- **Export dirs**: `false` (off) — opt in. SvelteKit route/hook files (`+*.{c,svelte,n}`, `hooks.*`) are excluded from the export scan since their named exports (`load`, `actions`, `handle`, …) are framework-consumed.
+- **Export globs**: `[]` (off) — opt in with e.g. `['src/lib/**/public.c']`. SvelteKit route/hook files (`+*`, `hooks.*`) are excluded from the export scan since their named exports (`load`, `actions`, `handle`, …) are framework-consumed.
 - **Export extensions**: `['.c', '.civet', '.js']`. `.ts` is excluded by default — regex-based scanning can't reliably tell value exports from type-only ones under `verbatimModuleSyntax`.
 
 ### UI library presets
@@ -137,7 +138,6 @@ export default {
   plugins: [
     nornsCivetPlugin(),
     nornsAutoImport({
-      exportDirs: ['src/lib', 'src/routes'],
       components: ui.components   // { Btn: '@human-synthesis/norns-ui/components/Btn.n', … }
     }),
     sveltekit()
@@ -157,7 +157,7 @@ Drop `src/lib/components/Btn.n` in your project and it shadows the preset's `Btn
 | `componentDirs` | `['src/lib/components']` | `false` or `[]` to disable. |
 | `componentExtensions` | `['.svelte', '.n']` | |
 | `components` | `null` | `Record<name, importPath>` — bare-specifier preset map. |
-| `exportDirs` | `false` | Off by default. Opt in with e.g. `['src/lib', 'src/routes']`. |
+| `exportGlobs` | `[]` | Off by default. Opt in with e.g. `['src/lib/**/public.c']`. |
 | `exportExtensions` | `['.c', '.civet', '.js']` | |
 | `libRoot` | `'src/lib'` | Project-relative root that `libAlias` maps to. |
 | `libAlias` | `'$lib'` | Alias prefix emitted in import paths. |
@@ -212,6 +212,21 @@ export actions := page.actions
 ```
 
 The wrappers handle: input parsing, [valibot](https://valibot.dev) validation, container resolution, and consistent error mapping.
+
+## CLI
+
+The `norns` binary wraps Vite and adds the checks an agent (or a human) should run before calling a change done:
+
+```sh
+norns dev | build | preview        # vite, with framework-source watching in workspace mode
+norns lint [--json]                # Civet / Pug pitfall scan over .c / .civet / .n (templates AND script blocks) + vite.config
+norns check [--json] [--warnings]  # preprocess + compile every .n / .c / .civet through your svelte.config.js; file:line:column errors
+norns diag <file>                  # the JS Civet emits for a .c / .civet / .n script block
+norns diag --template <file.n>     # the Svelte source the compiler sees after Pug / Civet / auto-import preprocessing
+norns migrate status | up | create <feature>/<name>
+```
+
+Verification order for a change: `lint`, `check`, `build`, then `curl` through `dev`. `lint` catches the known traps (`isnt`, `:= $state` reassigned, `+each` with `of`, leading `{` in Pug, `#{}` interpolation); `check` is the full compile. Pug and Civet errors are mapped to the line you wrote (not to svelte-preprocess's mixin prelude or the script block's own numbering). Svelte compile errors inside Pug-rendered markup are reported against the preprocessed output with a note, because Pug emits no source map — `diag --template` shows that output. `svelte-check` never reads `.n` / `.c`, so it is not a pass signal for Norns code.
 
 ## Migrations
 

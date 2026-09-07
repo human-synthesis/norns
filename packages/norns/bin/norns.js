@@ -11,8 +11,9 @@ import {
 	applyMigrations,
 	createMigration
 } from '../src/migrate.js';
-import { nornsLint, printFindings } from '../src/lint.js';
-import { nornsDiag } from '../src/diag.js';
+import { nornsLint, printFindings, countFindings } from '../src/lint.js';
+import { nornsDiag, nornsDiagTemplate } from '../src/diag.js';
+import { nornsCheck, printCheck, loadSvelteConfig } from '../src/check.js';
 
 const FRAMEWORK_PKGS = ['@human-synthesis/norns-core', '@human-synthesis/norns'];
 
@@ -273,30 +274,67 @@ function openTargetDb(cwd) {
 	return openSqliteDb(cwd, target.path);
 }
 
-function lintCommand() {
+function lintCommand(args, flags) {
 	const findings = nornsLint(process.cwd());
+	if (flags.has('--json')) {
+		const { errors, warnings } = countFindings(findings);
+		console.log(JSON.stringify({ ok: errors === 0, errors, warnings, findings }, null, 2));
+		process.exit(errors > 0 ? 1 : 0);
+	}
 	const { errors } = printFindings(findings);
 	process.exit(errors > 0 ? 1 : 0);
 }
 
-async function diagCommand(rest) {
-	const file = rest[0];
+async function checkCommand(args, flags) {
+	let result;
+	try {
+		result = await nornsCheck({ cwd: process.cwd(), warnings: flags.has('--warnings') });
+	} catch (err) {
+		console.error(`norns check: ${err.message}`);
+		if (err.stack) console.error(err.stack);
+		process.exit(2);
+	}
+	if (flags.has('--json')) {
+		console.log(JSON.stringify({ ok: result.errors.length === 0, ...result }, null, 2));
+		process.exit(result.errors.length > 0 ? 1 : 0);
+	}
+	const errors = printCheck(result);
+	process.exit(errors > 0 ? 1 : 0);
+}
+
+async function diagCommand(args, flags) {
+	const file = args[0];
 	if (!file) {
-		console.error('Usage: norns diag <file.c | file.civet | file.n>');
+		console.error('Usage: norns diag [--template] <file.c | file.civet | file.n>');
 		process.exit(1);
 	}
 	try {
-		const js = await nornsDiag(file);
-		process.stdout.write(js);
-		if (!js.endsWith('\n')) process.stdout.write('\n');
+		let out;
+		if (flags.has('--template')) {
+			const config = await loadSvelteConfig(process.cwd());
+			let pre = config?.preprocess;
+			if (!pre) {
+				const { nornsPreprocess } = await import('@human-synthesis/norns-core/preprocess');
+				pre = nornsPreprocess();
+			}
+			out = await nornsDiagTemplate(file, pre);
+		} else {
+			out = await nornsDiag(file);
+		}
+		process.stdout.write(out);
+		if (!out.endsWith('\n')) process.stdout.write('\n');
 	} catch (err) {
 		console.error(`norns diag: ${err.message}`);
-		if (err.stack) console.error(err.stack);
+		if (err.stack && !err.line) console.error(err.stack);
 		process.exit(1);
 	}
 }
 
 const [, , cmd = 'dev', ...rest] = process.argv;
+// `--flag` options are collected separately for the norns-owned commands;
+// dev/build/preview pass everything through to vite untouched.
+const flags = new Set(rest.filter((a) => a.startsWith('--')));
+const args = rest.filter((a) => !a.startsWith('--'));
 
 switch (cmd) {
 	case 'dev':
@@ -310,10 +348,13 @@ switch (cmd) {
 		migrateCommand(rest);
 		break;
 	case 'lint':
-		lintCommand();
+		lintCommand(args, flags);
+		break;
+	case 'check':
+		checkCommand(args, flags);
 		break;
 	case 'diag':
-		diagCommand(rest);
+		diagCommand(args, flags);
 		break;
 	case '-h':
 	case '--help':
@@ -326,9 +367,12 @@ Commands:
   migrate status                     list applied + pending migrations
   migrate up                         apply pending migrations
   migrate create <feature>/<name>    scaffold a new SQL migration
-  lint                               scan .c/.civet/.n + vite.config for known AI pitfalls
-  diag <file>                        print the compiled JS for a .c/.civet/.n file
+  lint [--json]                      scan .c/.civet/.n (templates + script blocks) and vite.config for known pitfalls
+  check [--json] [--warnings]        preprocess + compile every .n/.c/.civet through svelte.config.js; file:line:column errors
+  diag <file>                        print the JS Civet compiles a .c/.civet/.n script to
+  diag --template <file.n>           print the Svelte source the compiler sees after Pug/Civet/auto-import preprocessing
 
+Verification order for a change: lint, check, build, then curl through dev.
 Migration db is read from \$DATABASE_URL (default: file:./data/app.db).
 Only file: (better-sqlite3) is supported in v1; for D1 use \`wrangler d1 migrations apply\`.
 `);
