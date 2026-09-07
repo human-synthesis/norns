@@ -12,6 +12,12 @@ export namespace page {
      * Wrap a SvelteKit `actions` object. Each action takes `{ input?, run }`
      * — `input` is a schema, `run` is the handler.
      *
+     * The body is read with the same reader as `route()`, so the app-wide
+     * serializer's `parseBody` applies here too. Note that SvelteKit itself
+     * only dispatches form-encoded POSTs to actions (anything else is a 415
+     * before this code runs); clients posting JSON or TRON must target a
+     * `+server.c` route.
+     *
      * @param {Record<string, { input?: any, run: (ctx: ActionContext) => any | Promise<any> }>} spec
      * @returns {Record<string, (event: RequestEvent) => Promise<any>>}
      */

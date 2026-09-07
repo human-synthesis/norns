@@ -211,7 +211,29 @@ export actions := page.actions
       throw redirect 303, `/notes/${id}`
 ```
 
-The wrappers handle: input parsing, [valibot](https://valibot.dev) validation, container resolution, and consistent error mapping.
+The wrappers handle: input parsing, [valibot](https://valibot.dev) validation, container resolution, and consistent error mapping. `route()` reads JSON, form and (through the app-wide serializer) TRON bodies with one `readBody()`; `page.actions` uses the same reader, though SvelteKit itself only dispatches form-encoded POSTs to actions, so JSON/TRON clients target a `+server.c` route.
+
+### List endpoints and caching
+
+Large lists stay out of `load`: a `route()` serves one page at a time, and the page owns the paging state. `listQuery()` is the query convention (`?page=&pageSize=&sort=&dir=&q=`, validated: unknown sort keys are a 400) and `listResult()` the `{ data, total, page, pageSize }` envelope that norns-ui's `useList()` and a TRON `path: '$.data'` contract expect:
+
+```civet
+# src/routes/api/notes/+server.c
+export GET := route
+  query: listQuery { sort: ['title', 'updated_at'], defaultSort: 'updated_at', defaultDir: 'desc', pageSize: 25 }
+  handler: async ({ query, container }) =>
+    { data, total } := await notes(container).page query   # query.offset / pageSize / sort / dir / q
+    listResult query, data, total
+```
+
+`cache: { ttl }` turns a GET route into a cacheable one: `Cache-Control` + `ETag` on the response, `If-None-Match` answered with a 304, and on Cloudflare Workers (`event.platform.caches`) the encoded body is stored in the edge cache so the handler and the serializer run once per TTL. Entries vary on `Accept` by default, so JSON and TRON never mix; `private: true` skips the shared cache. The response carries `x-norns-cache: hit|miss`. Note that wrangler's dev platform proxy implements the Cache API as a no-op, so locally every request is a `miss`; the header logic is still exercised.
+
+```civet
+export GET := route
+  serializer: tronSerializer({ columnar: true })
+  cache: { ttl: 30 }
+  handler: ({ container }) => notes(container).stats()
+```
 
 ## CLI
 

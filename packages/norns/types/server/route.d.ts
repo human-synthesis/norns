@@ -10,11 +10,12 @@ export function setSerializer(serializer: Serializer | null): void;
 export function getSerializer(): Serializer | null;
 /**
  * Wrap a `+server.c` handler. Bakes in:
- *   1. body parsing (JSON / urlencoded / multipart) + validation
+ *   1. body parsing (JSON / urlencoded / multipart / serializer-specific) + validation
  *   2. query validation
  *   3. container resolution from `event.locals.container`
  *   4. JSON serialization of the return value (or pass-through if it's a Response)
  *   5. 400 errors on validation failure (via SvelteKit `error()`)
+ *   6. optional GET caching (`cache: { ttl }`)
  *
  * Use `throw error(...)` / `throw redirect(...)` from inside the handler for
  * non-success outcomes; SvelteKit will surface them.
@@ -23,6 +24,17 @@ export function getSerializer(): Serializer | null;
  * @returns {(event: RequestEvent) => Promise<Response>}
  */
 export function route(opts: RouteOptions): (event: RequestEvent) => Promise<Response>;
+/**
+ * Read and decode the request body based on its content-type. Returns `null`
+ * for empty bodies or unsupported types — the schema is then free to reject
+ * (or accept `null`). Shared by `route()` and `page.actions()`, so a
+ * serializer's `parseBody` (e.g. TRON) applies to both.
+ *
+ * @param {Request} request
+ * @param {Serializer | null} [serializer]
+ * @returns {Promise<any>}
+ */
+export function readBody(request: Request, serializer?: Serializer | null): Promise<any>;
 export type RequestEvent = import("@sveltejs/kit").RequestEvent;
 export type Container = import("./container.js").Container;
 export type RouteContext = {
@@ -59,6 +71,22 @@ export type Serializer = {
      */
     parseBody?: (request: Request, contentType: string) => Promise<any> | undefined;
 };
+export type RouteCache = {
+    /**
+     * seconds a GET response may be reused
+     */
+    ttl: number;
+    /**
+     * emit `Cache-Control: private` (per-user data)
+     * instead of `public`; also skips the shared edge cache
+     */
+    private?: boolean;
+    /**
+     * request headers the cached body depends on;
+     * default `['accept']` so JSON and TRON variants never mix
+     */
+    vary?: string[];
+};
 export type RouteOptions = {
     /**
      * body schema (Standard Schema or function)
@@ -73,5 +101,12 @@ export type RouteOptions = {
      * plain JSON even when an app-wide serializer is set
      */
     serializer?: Serializer | null;
+    /**
+     * GET/HEAD response caching: sets
+     * `Cache-Control` + `ETag`, answers `If-None-Match` with 304, and on
+     * Cloudflare Workers (`event.platform.caches`) also stores the encoded body
+     * in the edge cache so the handler and the serializer run once per TTL
+     */
+    cache?: RouteCache;
     handler: (ctx: RouteContext) => any | Promise<any>;
 };

@@ -1,5 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { validate, ValidationError } from './validate.js';
+import { readBody, getSerializer } from './route.js';
 
 /** @typedef {import('@sveltejs/kit').ServerLoadEvent} ServerLoadEvent */
 /** @typedef {import('@sveltejs/kit').RequestEvent} RequestEvent */
@@ -54,6 +55,12 @@ export const page = {
 	 * Wrap a SvelteKit `actions` object. Each action takes `{ input?, run }`
 	 * — `input` is a schema, `run` is the handler.
 	 *
+	 * The body is read with the same reader as `route()`, so the app-wide
+	 * serializer's `parseBody` applies here too. Note that SvelteKit itself
+	 * only dispatches form-encoded POSTs to actions (anything else is a 415
+	 * before this code runs); clients posting JSON or TRON must target a
+	 * `+server.c` route.
+	 *
 	 * @param {Record<string, { input?: any, run: (ctx: ActionContext) => any | Promise<any> }>} spec
 	 * @returns {Record<string, (event: RequestEvent) => Promise<any>>}
 	 */
@@ -68,7 +75,7 @@ export const page = {
 				let raw = null;
 				let input;
 				if (def.input !== undefined) {
-					raw = await readForm(event.request);
+					raw = await readBody(event.request, getSerializer());
 					try {
 						input = validate(def.input, raw);
 					} catch (e) {
@@ -89,19 +96,3 @@ export const page = {
 		return out;
 	}
 };
-
-/**
- * Read form-encoded body into a plain object. Designed for `actions` —
- * SvelteKit only invokes them via form POST.
- *
- * @param {Request} request
- * @returns {Promise<any>}
- */
-async function readForm(request) {
-	try {
-		const data = await request.formData();
-		return Object.fromEntries(data);
-	} catch {
-		return null;
-	}
-}
