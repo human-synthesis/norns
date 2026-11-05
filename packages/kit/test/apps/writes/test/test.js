@@ -18,8 +18,10 @@ test.describe('Filesystem updates', () => {
 			// future test file that has the same name
 			const route = 'zzzz' + Date.now();
 			const content = 'Hello new route';
-			const __dirname = path.dirname(fileURLToPath(import.meta.url));
-			const filepath = path.join(__dirname, `../src/routes/new-route/${route}/+page.svelte`);
+			const filepath = path.join(
+				import.meta.dirname,
+				`../src/routes/new-route/${route}/+page.svelte`
+			);
 			const dir = path.dirname(filepath);
 
 			try {
@@ -36,10 +38,14 @@ test.describe('Filesystem updates', () => {
 	}
 
 	test('Components are not double-mounted', async ({ page, javaScriptEnabled }) => {
+		// js-only: the file on disk is shared with the parallel no-js project, whose
+		// writes would trigger HMR updates that remount the component mid-assertion
+		test.skip(!javaScriptEnabled);
+
 		const file = fileURLToPath(new URL('../src/routes/double-mount/+page.svelte', import.meta.url));
 		const contents = fs.readFileSync(file, 'utf-8');
 
-		const mounted = javaScriptEnabled ? 1 : 0;
+		const mounted = 1;
 
 		try {
 			// we write to the file, to trigger HMR invalidation
@@ -116,5 +122,58 @@ test.describe('Filesystem updates', () => {
 		} finally {
 			fs.writeFileSync(file, contents);
 		}
+	});
+
+	test('Editing a server module does not reload unrelated modules', async ({
+		request,
+		javaScriptEnabled
+	}) => {
+		test.skip(!process.env.DEV || !javaScriptEnabled);
+
+		const file = fileURLToPath(new URL('../src/routes/ssr-reload/value.js', import.meta.url));
+		const contents = fs.readFileSync(file, 'utf-8');
+		const get_state = async () => (await request.get('/ssr-reload/control')).json();
+
+		const { id } = await get_state();
+
+		// the page's `load` waits until we resume it, so this request straddles the edit
+		const pending = request.get('/ssr-reload');
+		await expect.poll(async () => (await get_state()).waiting).toBe(true);
+
+		try {
+			fs.writeFileSync(file, contents.replace('original', 'updated'));
+			await expect.poll(async () => (await get_state()).value).toBe('updated');
+			await request.post('/ssr-reload/control');
+
+			expect((await pending).status()).toBe(200);
+			expect((await get_state()).id).toBe(id);
+		} finally {
+			await request.post('/ssr-reload/control');
+			fs.writeFileSync(file, contents);
+		}
+	});
+
+	test('Server hooks can be added and removed', async ({ request, javaScriptEnabled }) => {
+		test.skip(!process.env.DEV || !javaScriptEnabled);
+
+		const file = fileURLToPath(new URL('../src/hooks.server.js', import.meta.url));
+		const get_header = async () => (await request.get('/ssr-reload/control')).headers()['x-hooks'];
+
+		try {
+			fs.writeFileSync(
+				file,
+				`export async function handle({ event, resolve }) {
+	const response = await resolve(event);
+	response.headers.set('x-hooks', 'true');
+	return response;
+}
+`
+			);
+			await expect.poll(get_header).toBe('true');
+		} finally {
+			fs.rmSync(file);
+		}
+
+		await expect.poll(get_header).toBeUndefined();
 	});
 });

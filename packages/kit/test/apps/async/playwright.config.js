@@ -1,11 +1,3 @@
-import process from 'node:process';
-import { config } from '../../utils.js';
-import { defineConfig } from '@playwright/test';
+import { configure } from '../../utils.js';
 
-export default defineConfig({
-	...config,
-	webServer: {
-		command: process.env.DEV ? `pnpm dev` : `pnpm build && pnpm preview`,
-		port: process.env.DEV ? 5173 : 4173
-	}
-});
+export default configure();

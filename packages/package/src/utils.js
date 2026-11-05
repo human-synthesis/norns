@@ -1,9 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { VERSION } from 'svelte/compiler';
-import { posixify, mkdirp, walk } from './filesystem.js';
+import { posixify, walk } from './filesystem.js';
 
-const is_svelte_5_plus = Number(VERSION.split('.')[0]) >= 5;
+const svelte_major = Number(VERSION.split('.')[0]);
+const is_svelte_5_plus = svelte_major >= 5;
+export const predates_svelte_4 = svelte_major < 4;
 
 /**
  * Resolves aliases
@@ -132,7 +134,7 @@ export function strip_lang_tags(content) {
  * @param {Parameters<typeof fs.writeFileSync>[1]} contents
  */
 export function write(file, contents) {
-	mkdirp(path.dirname(file));
+	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, contents);
 }
 

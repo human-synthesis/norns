@@ -1,19 +1,9 @@
 import { execSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { adapters } from './adapters.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import process from 'node:process';
-
-/**
- * @template T
- * @template {keyof T} K
- * @typedef {Partial<Omit<T, K>> & Required<Pick<T, K>>} PartialExcept
- */
-
-/**
- * We use a custom `Builder` type here to support the minimum version of SvelteKit.
- * @typedef {PartialExcept<import('@sveltejs/kit').Builder, 'log' | 'rimraf' | 'mkdirp' | 'config' | 'prerendered' | 'routes' | 'createEntries' | 'generateFallback' | 'generateEnvModule' | 'generateManifest' | 'getBuildDirectory' | 'getClientDirectory' | 'getServerDirectory' | 'getAppPath' | 'writeClient' | 'writePrerendered' | 'writePrerendered' | 'writeServer' | 'copy' | 'compress'>} Builder2_0_0
- */
 
 /** @type {Record<string, (name: string, version: string) => string>} */
 const commands = {
@@ -91,7 +81,7 @@ function resolve_peer(dependency) {
 /** @typedef {import('@sveltejs/kit').Adapter} Adapter */
 
 /**
- * @returns {Promise<Adapter | undefined>} The corresponding adapter for the current environment if found otherwise undefined
+ * @returns {Promise<(() => Adapter) | undefined>} A function that creates the corresponding adapter for the current environment if found otherwise undefined
  */
 async function get_adapter() {
 	const match = adapters.find((candidate) => candidate.test());
@@ -133,43 +123,45 @@ async function get_adapter() {
 	}
 
 	/** @type {{ default: () => Adapter }} */
-	const module = await import(resolved);
+	const module = await import(pathToFileURL(resolved).href);
 
-	const adapter = module.default();
+	return () => {
+		const adapter = module.default();
 
-	return {
-		...adapter,
-		adapt: (builder) => {
-			builder.log.info(`Detected environment: ${match.name}. Using ${match.module}`);
-			return adapter.adapt(builder);
-		}
+		return {
+			...adapter,
+			adapt: (builder) => {
+				builder.log.info(`Detected environment: ${match.name}. Using ${match.module}`);
+				return adapter.adapt(builder);
+			}
+		};
 	};
 }
 
-/** @type {() => Adapter} */
-export default () => ({
-	name: '@sveltejs/adapter-auto',
-	/** @param {Builder2_0_0} builder */
-	adapt: async (builder) => {
-		const adapter = await get_adapter();
+// Detect the environment before SvelteKit configures Vite so that the detected
+// adapter can contribute its own Vite config and plugins
+const create_adapter = await get_adapter();
 
-		if (adapter) return adapter.adapt(/** @type {import('@sveltejs/kit').Builder} */ (builder));
-
-		builder.log.warn(
-			'Could not detect a supported production environment. See https://svelte.dev/docs/kit/adapters to learn how to configure your app to run on the platform of your choosing'
-		);
-	},
-	supports: {
-		read: () => {
-			supports_error(
-				'The read function imported from $app/server only works in certain environments'
+/** @type {typeof import('./index.js').default} */
+export default () =>
+	create_adapter?.() ?? {
+		name: '@sveltejs/adapter-auto',
+		adapt: (builder) => {
+			builder.log.warn(
+				'Could not detect a supported production environment. See https://svelte.dev/docs/kit/adapters to learn how to configure your app to run on the platform of your choosing'
 			);
 		},
-		instrumentation: () => {
-			supports_error('`instrumentation.server.js` only works in certain environments');
+		supports: {
+			read: () => {
+				supports_error(
+					'The read function imported from $app/server only works in certain environments'
+				);
+			},
+			instrumentation: () => {
+				supports_error('`instrumentation.server.js` only works in certain environments');
+			}
 		}
-	}
-});
+	};
 
 /**
  * @param {string} message

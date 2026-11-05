@@ -1,22 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { mkdirp } from '../../utils/filesystem.js';
-import { import_peer } from '../../utils/import.js';
-
-/** @type {{ VERSION: string }} */
-const { VERSION } = await import_peer('svelte/compiler');
-
-const [MAJOR, MINOR] = VERSION.split('.').map(Number);
-
-/** @type {Map<string, string>} */
-const previous_contents = new Map();
+import { resolve_entry } from '../../utils/filesystem.js';
+import * as w from '../../messages/build-warnings.js';
 
 /**
  * @param {string} file
  * @param {string} code
  */
 export function write_if_changed(file, code) {
-	if (code !== previous_contents.get(file)) {
+	// compare against the file itself rather than what this process wrote earlier: another
+	// process syncing the same project (such as `vitest run` beside `vite dev`) would
+	// otherwise rewrite every generated file with identical bytes, and the dev server
+	// reloads on each of them
+	if (code !== read(file)) {
 		write(file, code);
 	}
 }
@@ -26,9 +22,20 @@ export function write_if_changed(file, code) {
  * @param {string} code
  */
 export function write(file, code) {
-	previous_contents.set(file, code);
-	mkdirp(path.dirname(file));
+	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, code);
+}
+
+/**
+ * @param {string} file
+ * @returns {string | undefined} the contents of the file, or `undefined` if it cannot be read
+ */
+function read(file) {
+	try {
+		return fs.readFileSync(file, 'utf-8');
+	} catch {
+		return undefined;
+	}
 }
 
 /** @type {WeakMap<TemplateStringsArray, { strings: string[], indents: string[] }>} */
@@ -75,11 +82,17 @@ export function dedent(strings, ...values) {
 	return str;
 }
 
-export function isSvelte5Plus() {
-	return MAJOR >= 5;
-}
+/**
+ * @param {string} original
+ * @param {string} typo The common misspelling to check for
+ * @param {string} description What was wrong with the filename
+ * @param {string[]} extensions the extensions a module may have
+ */
+export function check_spelling(original, typo, description, extensions) {
+	const misspelled = resolve_entry(typo, extensions);
+	if (!misspelled) return;
 
-// TODO 3.0 remove this once we can bump the peerDep range
-export function supportsTrustedTypes() {
-	return (MAJOR === 5 && MINOR >= 51) || MAJOR > 5;
+	const corrected = path.basename(misspelled).replace(path.basename(typo), path.basename(original));
+
+	w.file_name_misspelled({ description, corrected, file: path.resolve(misspelled) });
 }

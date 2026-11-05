@@ -4,16 +4,19 @@
 	"private": true,
 	"scripts": {
 		"dev": "vite dev",
+		"preview": "vite preview",
 		"build": "vite build",
-		"prepare": "svelte-kit sync || echo ''",
+		"test:build": "vitest run build.test.js",
 		"test:platform": "playwright test"
 	},
 	"devDependencies": {
+		"@sveltejs/adapter-vercel": "workspace:*",
 		"@sveltejs/kit": "workspace:*",
 		"@sveltejs/vite-plugin-svelte": "catalog:",
 		"svelte": "catalog:",
 		"typescript": "catalog:",
-		"vite": "catalog:"
+		"vite": "catalog:",
+		"vitest": "catalog:"
 	},
 	"type": "module"
 }

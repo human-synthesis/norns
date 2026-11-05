@@ -1,8 +1,8 @@
 import process from 'node:process';
 import { expect } from '@playwright/test';
-import { test } from '../../../utils.js';
+import { test, variant } from '../../../utils.js';
 
-test.skip(() => !!process.env.REGISTER_SERVICE_WORKER);
+test.skip(() => variant === 'service-worker');
 
 test.describe.configure({ mode: 'parallel' });
 
@@ -31,19 +31,24 @@ test.describe('paths', () => {
 		expect(await page.textContent('[data-testid="assets"]')).toBe(`assets: ${base}`);
 	});
 
-	test('uses correct relative paths when rendering an error page for a missing __data.json', async ({
-		page,
-		javaScriptEnabled
-	}) => {
-		// a non-existent page requested with the data suffix renders the error page. Its relative
-		// paths must be resolved against the requested URL (including the `__data.json` suffix),
-		// otherwise they end up one directory too shallow and fail to load the app's assets
-		await page.goto('/basepath/this/does/not/exist/__data.json');
+	test('responds with JSON for a __data.json request to a missing route', async ({ request }) => {
+		// even when visited directly, a `__data.json` URL never gets an HTML page, so relative
+		// paths can always be resolved against the page URL
+		const response = await request.get('/basepath/this/does/not/exist/__data.json', {
+			headers: { accept: 'text/html' }
+		});
 
-		const expected = javaScriptEnabled ? '/basepath/' : '../../../../';
+		expect(response.status()).toBe(404);
+		expect(response.headers()['content-type']).toContain('application/json');
+		expect(await response.json()).toEqual({ message: 'Not Found', status: 404 });
+	});
 
-		expect(await page.textContent('[data-testid="base"]')).toBe(`base: ${expected}`);
-		expect(await page.textContent('[data-testid="assets"]')).toBe(`assets: ${expected}`);
+	test('uses relative paths of the page URL in a __data.json response', async ({ request }) => {
+		const response = await request.get('/basepath/redirect-relative/__data.json');
+		expect(await response.json()).toEqual({ type: 'redirect', status: 303, location: './hello' });
+
+		const data = await (await request.get('/basepath/relative-data/a/b/__data.json')).json();
+		expect(data.nodes.at(-1).data).toEqual([{ hello: 1 }, '../../hello']);
 	});
 
 	test('serves /basepath with trailing slash always', async ({ page }) => {
@@ -59,6 +64,11 @@ test.describe('paths', () => {
 		expect(new URL(page.url()).pathname).toBe('/basepath/');
 		await clicknav('[data-testid="link"]');
 		expect(new URL(page.url()).pathname).toBe('/basepath/hello');
+	});
+
+	test('serves a prerendered page for a server-side fetch of its path', async ({ page }) => {
+		await page.goto('/basepath/fetch-prerendered');
+		expect(await page.textContent('h1')).toBe('200 true');
 	});
 
 	test('query remote function from client accounts for base path', async ({
@@ -124,6 +134,19 @@ test.describe('trailing slash', () => {
 		await clicknav('a[href="/basepath/trailing-slash-server/prerender"]');
 		await expect(page.locator('h2')).toHaveText('/basepath/trailing-slash-server/prerender/');
 	});
+
+	test('normalizes the trailing slash of a prerendered page without dropping the base', async ({
+		request
+	}) => {
+		const response = await request.get('/basepath/trailing-slash-server/prerender');
+		expect(new URL(response.url()).pathname).toBe('/basepath/trailing-slash-server/prerender/');
+		expect(response.status()).toBe(200);
+
+		const redirect = await request.get('/basepath/trailing-slash-server/prerender', {
+			maxRedirects: 0
+		});
+		expect(redirect.status()).toBe(308);
+	});
 });
 
 test.describe('Service worker', () => {
@@ -162,6 +185,60 @@ test.describe("bundleStrategy: 'single'", () => {
 	test('serialization works with streaming', async ({ page }) => {
 		await page.goto('/basepath/serialization-stream');
 		await expect(page.locator('h1', { hasText: 'It works!' })).toBeVisible();
+	});
+});
+
+test.describe('Link header preload', () => {
+	test.skip(({ javaScriptEnabled }) => javaScriptEnabled || !!process.env.DEV);
+
+	test('injects Link headers', async ({ request }) => {
+		const response = await request.get('/basepath/asset-preload');
+
+		const header = response.headers()['link'];
+
+		expect(header).toContain('rel="modulepreload"');
+		expect(header).toContain('as="font"');
+	});
+
+	test('does not inject Link headers on prerendered pages', async ({ request }) => {
+		const response = await request.get('/basepath/asset-preload/prerendered');
+
+		const header = response.headers()['link'];
+		expect(header).toBeUndefined();
+	});
+
+	test('injects <link> tags on prerendered pages', async ({ request }) => {
+		const response = await request.get('/basepath/asset-preload/prerendered');
+
+		const body = await response.text();
+
+		expect(body).toContain('rel="modulepreload"');
+		expect(body).toContain('as="font"');
+	});
+
+	test('does not inject <link> tags on non-prerendered pages', async ({ request }) => {
+		const response = await request.get('/basepath/asset-preload');
+
+		const body = await response.text();
+
+		expect(body).not.toContain('rel="modulepreload"');
+		expect(body).not.toContain('as="font"');
+	});
+});
+
+test.describe('$app/env', () => {
+	// regression test for https://github.com/sveltejs/kit/issues/15971:
+	// importing `$app/env` before the router is initialized (e.g. in
+	// hooks.client.js) must not throw `__SVELTEKIT_APP_VERSION__ is not defined`
+	test('version is defined when imported during client init', async ({
+		page,
+		javaScriptEnabled
+	}) => {
+		test.skip(!javaScriptEnabled || !process.env.DEV);
+
+		await page.goto('/basepath', { wait_for_started: false });
+		await expect(page.locator('body.started')).toBeVisible();
+		expect(await page.pageErrors()).toHaveLength(0);
 	});
 });
 

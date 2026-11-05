@@ -1,5 +1,5 @@
 import { sveltekit } from '@sveltejs/kit/vite';
-import adapter from '../../../index.js';
+import adapter from '@sveltejs/adapter-node';
 
 /** @type {import('vite').UserConfig} */
 const config = {
@@ -10,12 +10,7 @@ const config = {
 		sveltekit({
 			adapter: adapter({
 				envPrefix: 'MY_CUSTOM_'
-			}),
-			typescript: {
-				config(config) {
-					config.include.push('../playwright.config.js');
-				}
-			}
+			})
 		})
 	]
 };

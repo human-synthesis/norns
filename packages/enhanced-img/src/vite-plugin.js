@@ -1,9 +1,10 @@
+/** @import { Expression, Super } from 'estree' */
 /** @import { AST } from 'svelte/compiler' */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import MagicString from 'magic-string';
 import sharp from 'sharp';
-import { parse } from 'svelte-parse-markup';
+import { parse } from 'svelte/compiler';
 import { walk } from 'zimmerframe';
 
 // TODO: expose this in vite-imagetools rather than duplicating it
@@ -32,7 +33,7 @@ export function image_plugin(imagetools_plugin) {
 				);
 			}
 			const api = svelteConfigPlugin.api;
-			const id_filter = (api.filter ?? api.idFilter).id; // TODO: idFilter was used by earlier versions of vite-plugin-svelte@6, remove when @7 is required
+			const id_filter = api.filter.id;
 			// @ts-expect-error plugin.transform is defined below before configResolved is called
 			plugin.transform.filter.id = {
 				include: id_filter.include,
@@ -58,6 +59,23 @@ export function image_plugin(imagetools_plugin) {
 				 * @type {Map<string, string>}
 				 */
 				const imports = new Map();
+				const identifiers = new Set();
+				let generated_name_index = 0;
+
+				walk(/** @type {any} */ (ast), null, {
+					_(node, { next }) {
+						if (node.type === 'Identifier') identifiers.add(node.name);
+						next();
+					}
+				});
+
+				function generate_name() {
+					while (true) {
+						const index = generated_name_index++;
+						const name = `__img${index ? `_${index}` : ''}`;
+						if (!identifiers.has(name)) return name;
+					}
+				}
 
 				/**
 				 * @param {import('svelte/compiler').AST.RegularElement} node
@@ -67,20 +85,31 @@ export function image_plugin(imagetools_plugin) {
 				async function update_element(node, src_attribute) {
 					if (src_attribute.type === 'ExpressionTag') {
 						const start =
-							'end' in src_attribute.expression
-								? src_attribute.expression.end
-								: src_attribute.expression.range?.[0];
-						const end =
 							'start' in src_attribute.expression
 								? src_attribute.expression.start
+								: src_attribute.expression.range?.[0];
+						const end =
+							'end' in src_attribute.expression
+								? src_attribute.expression.end
 								: src_attribute.expression.range?.[1];
 
 						if (typeof start !== 'number' || typeof end !== 'number') {
 							throw new Error('ExpressionTag has no range');
 						}
-						const src_var_name = content.substring(start, end).trim();
+						const src_expression = content.substring(start, end).trim();
+						const should_declare = !is_reference(src_attribute.expression);
+						const src_var_name = should_declare ? generate_name() : src_expression;
 
-						s.update(node.start, node.end, dynamic_img_to_picture(content, node, src_var_name));
+						s.update(
+							node.start,
+							node.end,
+							dynamic_img_to_picture(
+								content,
+								node,
+								should_declare ? src_expression : undefined,
+								src_var_name
+							)
+						);
 						return;
 					}
 
@@ -259,7 +288,7 @@ function get_attr_value(node, attr) {
  *   src: string,
  *   width?: string | number,
  *   height?: string | number
- * }} details
+ * }} details `width` and `height` are numbers, or strings of JS evaluated at runtime
  */
 function serialize_img_attributes(content, attributes, details) {
 	const attribute_strings = attributes.map((attribute) => {
@@ -284,20 +313,12 @@ function serialize_img_attributes(content, attributes, details) {
 	}
 	if (details.width && details.height) {
 		if (!user_width && !user_height) {
-			attribute_strings.push(`width=${details.width}`);
-			attribute_strings.push(`height=${details.height}`);
+			attribute_strings.push(`width=${to_attribute_value(details.width)}`);
+			attribute_strings.push(`height=${to_attribute_value(details.height)}`);
 		} else if (!user_width && user_height) {
-			attribute_strings.push(
-				`width=${Math.round(
-					(stringToNumber(details.width) * user_height) / stringToNumber(details.height)
-				)}`
-			);
+			attribute_strings.push(`width=${scale(details.width, details.height, user_height)}`);
 		} else if (!user_height && user_width) {
-			attribute_strings.push(
-				`height=${Math.round(
-					(stringToNumber(details.height) * user_width) / stringToNumber(details.width)
-				)}`
-			);
+			attribute_strings.push(`height=${scale(details.height, details.width, user_width)}`);
 		}
 	}
 
@@ -305,10 +326,34 @@ function serialize_img_attributes(content, attributes, details) {
 }
 
 /**
- * @param {string|number} param
+ * Scales an image dimension by the ratio of the size the user set to the matching image size.
+ * @param {string | number} size
+ * @param {string | number} matching_size
+ * @param {number} user_size
+ * @returns {string | number}
  */
-function stringToNumber(param) {
-	return typeof param === 'string' ? parseInt(param) : param;
+function scale(size, matching_size, user_size) {
+	if (typeof size === 'number' && typeof matching_size === 'number') {
+		return Math.round((size * user_size) / matching_size);
+	}
+	return `{Math.round((${size} * ${user_size}) / ${matching_size})}`;
+}
+
+/**
+ * @param {string | number} value
+ * @returns {string | number}
+ */
+function to_attribute_value(value) {
+	return typeof value === 'string' ? `{${value}}` : value;
+}
+
+/**
+ * @param {Expression | Super} expression
+ */
+function is_reference(expression) {
+	if (expression.type === 'Identifier') return true;
+	if (expression.type !== 'MemberExpression' || expression.computed) return false;
+	return is_reference(expression.object);
 }
 
 /**
@@ -355,9 +400,10 @@ function to_value(src) {
  * For images like `<img src={manually_imported} />`
  * @param {string} content
  * @param {import('svelte/compiler').AST.RegularElement} node
+ * @param {string | undefined} src_expression
  * @param {string} src_var_name
  */
-function dynamic_img_to_picture(content, node, src_var_name) {
+function dynamic_img_to_picture(content, node, src_expression, src_var_name) {
 	const attributes = node.attributes;
 	/**
 	 * @param attribute_name {string}
@@ -377,7 +423,7 @@ function dynamic_img_to_picture(content, node, src_var_name) {
 		attributes.splice(size_index, 1);
 	}
 
-	return `{#if typeof ${src_var_name} === 'string'}
+	const picture = `{#if typeof ${src_var_name} === 'string'}
 	{#if import.meta.env.DEV && ${!width_index && !height_index}}
 		{${src_var_name}} was not enhanced. Cannot determine dimensions.
 	{:else}
@@ -392,9 +438,23 @@ function dynamic_img_to_picture(content, node, src_var_name) {
 		{/each}
 		<img ${serialize_img_attributes(content, attributes, {
 			src: `{${src_var_name}.img.src}`,
-			width: `{${src_var_name}.img.w}`,
-			height: `{${src_var_name}.img.h}`
+			width: `${src_var_name}.img.w`,
+			height: `${src_var_name}.img.h`
 		})} />
 	</picture>
 {/if}`;
+
+	// When the source is a computed expression we cache it in a variable to avoid evaluating it
+	// multiple times (e.g. calling a function once per template position). We use a reactive
+	// `{@const}` — wrapped in an `{#if true}` block so it's valid at this position — rather than a
+	// plain `{const}` declaration tag. Declaration tags cannot be used in legacy-mode components
+	// (they throw a compile error) and are only evaluated once, breaking reactivity when the
+	// expression depends on reactive state. `{@const}` is reactive, memoized, and works in both
+	// legacy and runes mode since Svelte 5.0.
+	// TODO use `{const ...}` when we switch to Svelte 6
+	if (src_expression) {
+		return `{#if true}{@const ${src_var_name} = ${src_expression}}\n${picture}\n{/if}`;
+	}
+
+	return picture;
 }

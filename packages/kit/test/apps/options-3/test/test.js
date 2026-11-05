@@ -29,7 +29,23 @@ test.describe("bundleStrategy: 'inline'", () => {
 		expect(content).not.toMatch(/immutable\/(?:bundle|assets\/style)/);
 	});
 
+	test('emits a sourcemap that includes the user service worker', () => {
+		/** @type {{ sources: string[] }} */
+		const map = JSON.parse(fs.readFileSync(`${client}/service-worker.js.map`, 'utf-8'));
+		expect(map.sources.some((source) => source.endsWith('src/service-worker.js'))).toBe(true);
+	});
+
+	test('omits inlined files from the page manifest', async ({ page }) => {
+		await page.goto('/app-manifest');
+		expect(await page.textContent('pre')).not.toMatch(/immutable\/(?:bundle|assets\/style)/);
+	});
+
 	test('still emits version.json', () => {
 		expect(fs.existsSync(`${client}/_app/version.json`)).toBe(true);
+	});
+
+	test('does not send x-sveltekit-version header when checks are disabled', async ({ request }) => {
+		const response = await request.get('/serialization-stream/__data.json');
+		expect(response.headers()['x-sveltekit-version']).toBeUndefined();
 	});
 });

@@ -1,46 +1,5 @@
 import process from 'node:process';
 
-/** @param {import("@sveltejs/kit").RouteDefinition<any>} route */
-export function get_pathname(route) {
-	let i = 1;
-
-	const pathname = route.segments
-		.map((segment) => {
-			if (!segment.dynamic) {
-				return '/' + segment.content;
-			}
-
-			const parts = segment.content.split(/\[(.+?)\](?!\])/);
-
-			if (
-				parts.length === 3 &&
-				!parts[0] &&
-				!parts[2] &&
-				(parts[1].startsWith('...') || parts[1][0] === '[')
-			) {
-				// Special case: segment is a single optional or rest parameter.
-				// In that case we don't prepend a slash (also see comment in pattern_to_src).
-				return `$${i++}`;
-			} else {
-				return (
-					'/' +
-					parts
-						.map((content, j) => {
-							if (j % 2) {
-								return `$${i++}`;
-							} else {
-								return content;
-							}
-						})
-						.join('')
-				);
-			}
-		})
-		.join('');
-
-	return pathname[0] === '/' ? pathname.slice(1) : pathname;
-}
-
 /**
  * Adjusts the stringified route regex for Vercel's routing system
  * @param {string} pattern stringified route regex
@@ -57,15 +16,20 @@ export function pattern_to_src(pattern) {
 		src = '^/?';
 	}
 
-	// Move non-capturing groups that swallow slashes into their following capturing groups.
-	// This is necessary because during ISR we're using the regex to construct the __pathname
-	// query parameter: In case of a route like [required]/[...rest] we need to turn them
-	// into $1$2 and not $1/$2, because if [...rest] is empty, we don't want to have a trailing
-	// slash in the __pathname query parameter which wasn't there in the original URL, as that
-	// could result in a false trailing slash redirect in the SvelteKit runtime, leading to infinite redirects.
-	src = src.replace(/\(\?:\/\((.+?)\)\)/g, '(/$1)');
-
 	return src;
+}
+
+/**
+ * Escapes a pathname so that it can be matched literally by a Vercel route `src` regex
+ * @param {string} pathname
+ */
+export function escape_src(pathname) {
+	// hex escapes rather than backslash escapes, since Vercel only appends the `$` anchor
+	// if `src` doesn't already end with `$`, and it replaces `\/` with `/`
+	return pathname.replace(
+		/[.*+?^${}()|[\]\\]/g,
+		(char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`
+	);
 }
 
 const integer = /^\d+$/;
@@ -113,49 +77,71 @@ export function parse_isr_expiration(value, route_id) {
  * @returns {RuntimeKey}
  */
 export function resolve_runtime(default_key, override_key) {
-	const key = (override_key ?? default_key ?? get_default_runtime()).replace('experimental_', '');
+	const key = override_key ?? default_key ?? get_default_runtime();
 	assert_is_valid_runtime(key);
 	return key;
 }
 
-const valid_node_versions = [20, 22, 24];
-const formatter = new Intl.ListFormat('en', { type: 'disjunction' });
+const valid_bun_versions = /** @type {const} */ (['1.x', '1.4.x']);
 
 /** @returns {RuntimeKey} */
 function get_default_runtime() {
-	// TODO may someday need to auto-detect Bun, but this will be complicated because you may want to run your build
-	// with Bun but not have your serverless runtime be in Bun. Vercel will likely have to attach something to `globalThis` or similar
-	// to tell us what the bun configuration is.
-	const major = Number(process.version.slice(1).split('.')[0]);
+	// if the user ran e.g. `bunx --bun vite build`, infer that they want to run the app in Bun
+	if (process.versions.bun) {
+		const [major, minor] = process.versions.bun.split('.');
+		if (major !== '1') {
+			throw new Error(
+				`Unsupported Bun version: ${major}. Please use Bun 1.x to build your project, or explicitly specify a runtime in your adapter configuration.`
+			);
+		}
 
-	if (!valid_node_versions.includes(major)) {
-		throw new Error(
-			`Unsupported Node.js version: ${process.version}. Please use Node ${formatter.format(valid_node_versions.map((v) => `${v}`))} to build your project, or explicitly specify a runtime in your adapter configuration.`
+		// pin the minor when Vercel can resolve it specifically (e.g. `bun1.4.x`),
+		// otherwise fall back to `bun1.x` so a newer Bun still builds
+		const version = minor ? `${major}.${minor}.x` : `${major}.x`;
+		return /** @type {`bun${typeof valid_bun_versions[number]}`} */ (
+			`bun${valid_bun_versions.includes(/** @type {typeof valid_bun_versions[number]} */ (version)) ? version : `${major}.x`}`
 		);
 	}
 
-	return `nodejs${/** @type {20 | 22 | 24} */ (major)}.x`;
+	// otherwise, default to the version of Node specified in the project config
+	if (process.versions.node) {
+		const major = Number(process.versions.node.split('.')[0]);
+		const version_key = /** @type {const} */ (`nodejs${major}.x`);
+
+		if (!valid_node_version_regex.test(version_key)) {
+			throw new Error(
+				`Unsupported Node.js version: ${process.version}. Please use an up-to-date Node version to build your project, or explicitly specify a runtime in your adapter configuration.`
+			);
+		}
+
+		return version_key;
+	}
+
+	throw new Error(
+		'Could not auto-detect a runtime. Please explicitly specify a runtime in your adapter configuration.'
+	);
 }
 
-const valid_runtimes = /** @type {const} */ ([
-	'nodejs20.x',
-	'nodejs22.x',
-	'nodejs24.x',
-	'bun1.x',
-	'edge'
-]);
+const valid_non_node_runtimes = /** @type {const} */ (['bun1.x', 'bun1.4.x']);
+// Node 20, 22, 24, and every major from 26
+const valid_node_version_regex = /^nodejs(2[0246-9]|[3-9]\d)\.x$/;
 
 /**
  * @param {string} key
  * @returns {asserts key is RuntimeKey}
  */
 function assert_is_valid_runtime(key) {
-	if (!valid_runtimes.includes(/** @type {RuntimeKey} */ (key))) {
+	if (
+		!valid_non_node_runtimes.includes(
+			/** @type {typeof valid_non_node_runtimes[number]} */ (key)
+		) &&
+		!valid_node_version_regex.test(key)
+	) {
 		throw new Error(
-			`Unsupported runtime: ${key}. Supported runtimes are: ${valid_runtimes.join(', ')}. See the Node.js Version section in your Vercel project settings for info on the currently supported versions.`
+			`Unsupported runtime: ${key}. Supported runtimes are: ${valid_non_node_runtimes.join(', ')}, and up-to-date Node versions. See the Node.js Version section in your Vercel project settings for info on the currently supported versions.`
 		);
 	}
 }
 
-/** @typedef {Exclude<RuntimeKey, 'bun1.x'> | 'experimental_bun1.x'} RuntimeConfigKey */
-/** @typedef {typeof valid_runtimes[number]} RuntimeKey */
+// this is what to update when Vercel adds a new Node runtime or deprecates an old one! leave the rest of the code alone
+/** @typedef {typeof valid_non_node_runtimes[number] | 'nodejs22.x' | 'nodejs24.x' | 'nodejs26.x' | ({} & `nodejs${number}.x`)} RuntimeKey */

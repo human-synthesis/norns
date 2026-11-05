@@ -2,9 +2,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { expect } from '@playwright/test';
-import { test } from '../../../utils.js';
+import { test, variant } from '../../../utils.js';
 
-test.skip(({ javaScriptEnabled }) => !javaScriptEnabled || !process.env.REGISTER_SERVICE_WORKER);
+test.skip(({ javaScriptEnabled }) => !javaScriptEnabled || variant !== 'service-worker');
 
 test('import proxy /basepath/service-worker.js', async ({ request }) => {
 	test.skip(!process.env.DEV);
@@ -28,25 +28,20 @@ test('build /basepath/service-worker.js', async ({ baseURL, request }) => {
 	const self = {
 		addEventListener: () => {},
 		base: null,
-		build: null,
+		/** @type {null | Array<{ path: string }>} */
+		immutable: null,
 		image_src: undefined
 	};
 
 	const pathname = '/basepath/service-worker.js';
-
-	// stubs for explicit environment variables in service workers
-	globalThis.importScripts = () => {};
-	globalThis.__sveltekit_sw = {
-		env: {}
-	};
 
 	fn(self, {
 		href: baseURL + pathname,
 		pathname
 	});
 
-	expect(self.base).toBe('/basepath');
-	expect(self.build?.[0]).toMatch(/\/basepath\/_app\/immutable\/bundle\.[\w-]+\.js/);
+	expect(self.base).toBe('/basepath/');
+	expect(self.immutable?.[0].path).toMatch(/^_app\/immutable\/bundle\.[\w-]+\.js/);
 	expect(self.image_src).toMatch(/\/basepath\/_app\/immutable\/assets\/image\.[\w-]+\.jpg/);
 });
 
