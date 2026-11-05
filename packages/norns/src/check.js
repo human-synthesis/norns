@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { compile as compileCivet } from '@danielx/civet';
 import { walk } from './lint.js';
 
@@ -9,8 +10,9 @@ import { walk } from './lint.js';
  * does, without running the build.
  *
  *   - `.n` / `.svelte` (any extension in the project's `extensions`) go
- *     through the project's own `svelte.config.js` preprocess chain (Pug,
- *     Civet, auto-imports) and then the Svelte compiler.
+ *     through the project's own preprocess chain (Pug, Civet, auto-imports —
+ *     the `sveltekit()` options in `vite.config.js`) and then the Svelte
+ *     compiler.
  *   - `.c` / `.civet` modules go through the Civet compiler.
  *
  * Errors carry `file:line:column` in the *source* file where the pipeline
@@ -34,10 +36,16 @@ import { walk } from './lint.js';
  */
 
 /**
- * Load `svelte.config.js` from `cwd` (ESM). Returns null when absent.
+ * Load the project's Svelte/SvelteKit options (`preprocess`, `extensions`, …).
+ *
+ * SvelteKit 3: the options are passed to the `sveltekit()` plugin in
+ * `vite.config.js`, so resolve the Vite config and read them back from the
+ * `vite-plugin-sveltekit-setup` plugin's API. A legacy `svelte.config.js` is
+ * still honoured first, for projects that haven't moved yet. Returns null when
+ * neither is found.
  *
  * @param {string} cwd
- * @returns {Promise<import('@sveltejs/kit').Config | null>}
+ * @returns {Promise<Record<string, any> | null>}
  */
 export async function loadSvelteConfig(cwd) {
 	for (const name of ['svelte.config.js', 'svelte.config.mjs']) {
@@ -47,7 +55,25 @@ export async function loadSvelteConfig(cwd) {
 			return mod.default ?? mod;
 		}
 	}
-	return null;
+	const viteConfig = ['vite.config.js', 'vite.config.mjs', 'vite.config.ts', 'vite.config.mts']
+		.map((name) => join(cwd, name))
+		.find((p) => existsSync(p));
+	if (!viteConfig) return null;
+	const require = createRequire(join(cwd, 'package.json'));
+	const vite = await import(pathToFileURL(require.resolve('vite')).href);
+	const prevCwd = process.cwd();
+	try {
+		if (prevCwd !== cwd) process.chdir(cwd);
+		const resolved = await vite.resolveConfig(
+			{ configFile: viteConfig, root: cwd, logLevel: 'silent' },
+			'build',
+			process.env.MODE ?? 'production'
+		);
+		const plugin = resolved.plugins.find((p) => p.name === 'vite-plugin-sveltekit-setup');
+		return plugin?.api?.options ?? null;
+	} finally {
+		if (process.cwd() !== prevCwd) process.chdir(prevCwd);
+	}
 }
 
 async function loadTraceMapping() {

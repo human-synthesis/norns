@@ -3,7 +3,7 @@
  * does, without running the build.
  *
  *   - `.n` / `.svelte` (any extension in the project's `extensions`) go
- *     through the project's own `svelte.config.js` preprocess chain (Pug,
+ *     through the project's own preprocess chain (`sveltekit()` options) (Pug,
  *     Civet, auto-imports) and then the Svelte compiler.
  *   - `.c` / `.civet` modules go through the Civet compiler.
  *
@@ -27,12 +27,14 @@
  * @typedef {{ files: number, errors: CheckDiagnostic[], warnings: CheckDiagnostic[] }} CheckResult
  */
 /**
- * Load `svelte.config.js` from `cwd` (ESM). Returns null when absent.
+ * Load the project's Svelte/SvelteKit options: a legacy `svelte.config.js`
+ * if present, else the `sveltekit()` plugin options from `vite.config.js`.
+ * Returns null when neither is found.
  *
  * @param {string} cwd
- * @returns {Promise<import('@sveltejs/kit').Config | null>}
+ * @returns {Promise<Record<string, any> | null>}
  */
-export function loadSvelteConfig(cwd: string): Promise<import("@sveltejs/kit").Config | null>;
+export function loadSvelteConfig(cwd: string): Promise<Record<string, any> | null>;
 /**
  * @param {string} source
  * @param {number} line 1-based
@@ -71,7 +73,7 @@ export function isComponentFile(file: string, extensions?: string[]): boolean;
  * does, without running the build.
  *
  *   - `.n` / `.svelte` (any extension in the project's `extensions`) go
- *     through the project's own `svelte.config.js` preprocess chain (Pug,
+ *     through the project's own preprocess chain (`sveltekit()` options) (Pug,
  *     Civet, auto-imports) and then the Svelte compiler.
  *   - `.c` / `.civet` modules go through the Civet compiler.
  *
@@ -96,7 +98,7 @@ export type CheckDiagnostic = {
  * does, without running the build.
  *
  *   - `.n` / `.svelte` (any extension in the project's `extensions`) go
- *     through the project's own `svelte.config.js` preprocess chain (Pug,
+ *     through the project's own preprocess chain (`sveltekit()` options) (Pug,
  *     Civet, auto-imports) and then the Svelte compiler.
  *   - `.c` / `.civet` modules go through the Civet compiler.
  *

@@ -19,10 +19,14 @@
  *    Node's ESM module cache survives `server.restart()`.
  *
  * `.c` is recognised as an alias for `.civet` — both compile through Civet.
+ *  - provides the `$lib` alias (→ `src/lib`), which SvelteKit 3 no longer
+ *    supplies. `{ lib: false }` opts out; a string picks another directory.
  *
  * @returns {import('vite').Plugin}
  */
-export function nornsCivetPlugin(): import("vite").Plugin;
+export function nornsCivetPlugin(options?: {
+    lib?: string | false;
+}): import("vite").Plugin;
 /**
  * Vite plugin that extracts Tailwind class candidates from Pug shorthand
  * in `.n` files and writes them to a sidecar file Tailwind can scan.

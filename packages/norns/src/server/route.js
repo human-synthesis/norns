@@ -1,4 +1,4 @@
-import { json, error } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import { validate, ValidationError } from './validate.js';
 
 /** @typedef {import('@sveltejs/kit').RequestEvent} RequestEvent */
@@ -40,7 +40,7 @@ import { validate, ValidationError } from './validate.js';
  *   plain JSON even when an app-wide serializer is set
  * @property {RouteCache} [cache] GET/HEAD response caching: sets
  *   `Cache-Control` + `ETag`, answers `If-None-Match` with 304, and on
- *   Cloudflare Workers (`event.platform.caches`) also stores the encoded body
+ *   Cloudflare Workers (the global `caches`) also stores the encoded body
  *   in the edge cache so the handler and the serializer run once per TTL
  * @property {(ctx: RouteContext) => any | Promise<any>} handler
  */
@@ -110,7 +110,7 @@ export function route(opts) {
 				input = validate(inputSchema, raw);
 			} catch (e) {
 				if (e instanceof ValidationError) {
-					throw error(400, { message: e.message, issues: e.issues });
+					throw error(400, e.message, { issues: e.issues });
 				}
 				throw e;
 			}
@@ -123,7 +123,7 @@ export function route(opts) {
 				query = validate(querySchema, raw);
 			} catch (e) {
 				if (e instanceof ValidationError) {
-					throw error(400, { message: e.message, issues: e.issues });
+					throw error(400, e.message, { issues: e.issues });
 				}
 				throw e;
 			}
@@ -141,8 +141,8 @@ export function route(opts) {
 		if (result instanceof Response) response = result;
 		else if (serializer?.serialize) {
 			const r = serializer.serialize(result ?? null, event);
-			response = r instanceof Response ? r : json(result ?? null);
-		} else response = json(result ?? null);
+			response = r instanceof Response ? r : Response.json(result ?? null);
+		} else response = Response.json(result ?? null);
 
 		if (!cacheable || response.status !== 200) return response;
 
@@ -197,15 +197,19 @@ export async function readBody(request, serializer) {
 // ---------------------------------------------------------------- caching
 
 /**
- * The Workers edge cache when running on Cloudflare (`platform.caches` is
- * populated by adapter-cloudflare, in dev through the platform proxy). Null
- * elsewhere — the HTTP headers alone still give browser + CDN caching.
+ * The Workers edge cache when running on Cloudflare. SvelteKit 3's
+ * adapter-cloudflare exposes it as the global `caches` (in dev too, through the
+ * platform proxy); `event.platform.caches` is still read first for adapters /
+ * tests that pass it explicitly. Null elsewhere — the HTTP headers alone still
+ * give browser + CDN caching.
  *
  * @param {RequestEvent} event
  * @returns {{ match: (k: Request) => Promise<Response | undefined>, put: (k: Request, r: Response) => Promise<void> } | null}
  */
 function edgeCache(event) {
-	const store = /** @type {any} */ (event.platform)?.caches?.default;
+	const store =
+		/** @type {any} */ (event.platform)?.caches?.default ??
+		/** @type {any} */ (globalThis).caches?.default;
 	return store && typeof store.match === 'function' && typeof store.put === 'function' ? store : null;
 }
 

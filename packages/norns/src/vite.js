@@ -1,5 +1,5 @@
 import { readFile, stat, realpath, readdir, mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { compile as compileCivet } from '@danielx/civet';
 import { extractPugClasses } from '@human-synthesis/norns-core/preprocess';
@@ -68,24 +68,35 @@ async function resolveWorkspaceFrameworkSrcs(root) {
  *    process-level respawn when framework source changes — needed because
  *    Node's ESM module cache survives `server.restart()`.
  *
+ *  - provides the `$lib` alias (→ `src/lib`). SvelteKit 3 removed its built-in
+ *    `$lib` in favour of `#lib` subpath imports and deprecated its `alias`
+ *    option, so Norns supplies it as a plain Vite alias. Pass `{ lib: false }`
+ *    to opt out, or a different directory relative to the project root.
+ *    Editors / svelte-check need the matching `paths` entry in jsconfig.json.
+ *
  * `.c` is recognised as an alias for `.civet` — both compile through Civet.
  *
+ * @param {{ lib?: string | false }} [options]
  * @returns {import('vite').Plugin}
  */
-export function nornsCivetPlugin() {
+export function nornsCivetPlugin({ lib = 'src/lib' } = {}) {
 	/** @type {string[]} */
 	let watchSrcs = [];
 	return {
 		name: 'norns:civet',
 		enforce: 'pre',
-		async config(_userConfig, { command }) {
+		async config(userConfig, { command }) {
 			if (command === 'serve') {
 				watchSrcs = await resolveWorkspaceFrameworkSrcs(process.cwd());
 			}
+			const root = userConfig.root ? resolve(userConfig.root) : process.cwd();
 			/** @type {import('vite').UserConfig} */
 			const cfg = {
 				resolve: {
-					extensions: [...DEFAULT_EXTENSIONS, ...NORNS_EXTENSIONS]
+					extensions: [...DEFAULT_EXTENSIONS, ...NORNS_EXTENSIONS],
+					...(lib === false
+						? {}
+						: { alias: [{ find: /^\$lib(?=\/|\?|$)/, replacement: resolve(root, lib) }] })
 				},
 				optimizeDeps: {
 					exclude: [...FRAMEWORK_PKGS]

@@ -3,34 +3,44 @@ import { join } from 'node:path';
 import { nornsPreprocess } from '@human-synthesis/norns-core/preprocess';
 
 /**
- * Build a SvelteKit config preconfigured for Norns.
+ * Build the options for SvelteKit 3's `sveltekit()` Vite plugin, preconfigured
+ * for Norns. SvelteKit 3 no longer reads `svelte.config.js`; pass the result
+ * straight to the plugin:
+ *
+ *   sveltekit(nornsConfig({ adapter: adapter() }))
  *
  * Defaults:
  * - `extensions: ['.svelte', '.n']`         — both vanilla and Norns components
- * - `kit.moduleExtensions: ['.js', '.ts', '.c', '.civet']` — Kit special files
+ * - `moduleExtensions: ['.js', '.ts', '.c', '.civet']` — Kit special files
  *   (`+page.c`, `+page.civet`, etc.)
- * - `kit.files.hooks.server` — set to `src/hooks.server.{c,civet}` if either
- *   file exists. SvelteKit's upstream `resolve_entry` only searches `.js` /
- *   `.ts` for hooks (it doesn't honor `moduleExtensions`), so the explicit
- *   path is the non-invasive way to make `.c`/`.civet` hooks discoverable.
- *   Same for the client and universal counterparts.
+ * - `files.hooks.*` — set to `src/hooks.server.{c,civet}` (and the client /
+ *   universal counterparts) when such a file exists, so `.c`/`.civet` hooks
+ *   are found regardless of SvelteKit's entry resolution.
+
+ * The `$lib` alias (which SvelteKit 3 no longer provides) comes from
+ * `nornsCivetPlugin()` as a plain Vite alias — Kit's own `alias` option is
+ * deprecated.
  * - `preprocess: nornsPreprocess()`         — Pug + Civet
  *
- * Spread your own overrides at the call site to extend or replace defaults.
+ * A SvelteKit 2 style `kit: { ... }` block is still accepted and flattened
+ * into the top level, so older call sites keep working.
  *
- * @param {import('@sveltejs/kit').Config} [overrides]
- * @returns {import('@sveltejs/kit').Config}
+ * @param {Record<string, any>} [overrides]
+ * @returns {import('@sveltejs/kit/vite').Config}
  */
 export function nornsConfig(overrides = {}) {
 	const {
-		kit: kitOverrides = {},
+		kit: legacyKit = {},
 		preprocess: preprocessOverride,
 		extensions: extensionsOverride,
-		...rest
+		...flat
 	} = overrides;
 
+	// Flatten the Kit 2 `kit` namespace; explicit top-level keys win.
+	const options = { ...legacyKit, ...flat };
+
 	const cwd = process.cwd();
-	const userFiles = kitOverrides.files ?? {};
+	const userFiles = options.files ?? {};
 	const userHooks = userFiles.hooks ?? {};
 
 	const hooks = {
@@ -44,20 +54,17 @@ export function nornsConfig(overrides = {}) {
 		if (hooks[k] === undefined) delete hooks[k];
 	}
 
-	const { files: _ignoredUserFiles, ...kitRest } = kitOverrides;
+	const { files: _files, ...rest } = options;
 
 	return {
 		extensions: extensionsOverride ?? ['.svelte', '.n'],
 		preprocess: preprocessOverride ?? nornsPreprocess(),
-		kit: {
-			moduleExtensions: ['.js', '.ts', '.c', '.civet'],
-			...kitRest,
-			files: {
-				...userFiles,
-				hooks
-			}
-		},
-		...rest
+		moduleExtensions: ['.js', '.ts', '.c', '.civet'],
+		...rest,
+		files: {
+			...userFiles,
+			hooks
+		}
 	};
 }
 

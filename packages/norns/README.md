@@ -9,43 +9,56 @@ Includes a small runtime layer: feature-folder modularity, a DI container, route
 ## Stack
 
 - [Svelte 5](https://svelte.dev) — components and runes
-- [SvelteKit 2](https://kit.svelte.dev) — file-system routing, SSR, endpoints
+- [SvelteKit 3](https://svelte.dev/docs/kit) — file-system routing, SSR, endpoints
 - [Pug](https://pugjs.org) — templates
 - [Civet](https://civet.dev) — script (TypeScript-flavored, indented)
 - [Tailwind CSS v4](https://tailwindcss.com) — recommended styling (consumer-installed)
-- [Vite](https://vitejs.dev) — bundler
+- [Vite 8](https://vite.dev) — bundler
 - [bun](https://bun.sh) — runtime / package manager
 
 ## Install
 
 ```sh
-bun add -D @human-synthesis/norns @sveltejs/kit svelte
+bun add -D @human-synthesis/norns @sveltejs/kit @sveltejs/vite-plugin-svelte svelte vite
 ```
 
 Or use the [`norns-app`](https://github.com/human-synthesis/norns-app) starter, which has everything wired up.
 
 ## Setup
 
-`svelte.config.js`:
-
-```js
-import { nornsConfig } from '@human-synthesis/norns/config';
-
-export default nornsConfig({
-  // your overrides here
-});
-```
+SvelteKit 3 has no `svelte.config.js`: its options go to the `sveltekit()` Vite
+plugin. `nornsConfig()` builds them with the Norns defaults (`.n` components,
+`.c` / `.civet` modules and hooks, the Pug + Civet preprocessor).
 
 `vite.config.js`:
 
 ```js
 import { defineConfig } from 'vite';
 import { sveltekit } from '@sveltejs/kit/vite';
+import adapter from '@sveltejs/adapter-auto';
+import { nornsConfig } from '@human-synthesis/norns/config';
 import { nornsCivetPlugin } from '@human-synthesis/norns/vite';
 
 export default defineConfig({
-  plugins: [nornsCivetPlugin(), sveltekit()]
+  plugins: [
+    nornsCivetPlugin(),
+    sveltekit(nornsConfig({ adapter: adapter() }))
+  ]
 });
+```
+
+`nornsCivetPlugin()` also provides the `$lib` alias (→ `src/lib`), which
+SvelteKit 3 no longer ships. For editors and svelte-check, extend `$app/tsconfig`
+and declare the same path in `jsconfig.json`:
+
+```json
+{
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "paths": { "$lib": ["./src/lib"], "$lib/*": ["./src/lib/*"] }
+  },
+  "include": ["src", "tests", "*.js"]
+}
 ```
 
 `package.json`:
@@ -63,26 +76,13 @@ export default defineConfig({
 
 ## Auto-imports
 
-`nornsAutoImport()` returns an object that's both a Svelte preprocessor (for `.n` / `.svelte` files) and a Vite plugin (for standalone `.c` / `.civet` modules). The same instance has all four resolvers: framework helpers, project components, library presets, and (opt-in) project utilities. Wire it in both places — Svelte's compiler ignores the Vite hooks, Vite ignores the Svelte hooks:
-
-```js
-// svelte.config.js
-import { nornsConfig } from '@human-synthesis/norns/config';
-import { nornsPreprocess } from '@human-synthesis/norns/preprocess';
-import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
-
-export default nornsConfig({
-  preprocess: [
-    ...nornsPreprocess(),
-    nornsAutoImport({
-      componentDirs: ['src/lib/components', 'src/routes']
-    })
-  ]
-});
-```
+`nornsAutoImport()` returns an object that's both a Svelte preprocessor (for `.n` / `.svelte` files) and a Vite plugin (for standalone `.c` / `.civet` modules). The same instance has all four resolvers: framework helpers, project components, library presets, and (opt-in) project utilities. Wire it in both places — as a Vite plugin and in the `sveltekit()` preprocess list — because Svelte's compiler ignores the Vite hooks and Vite ignores the Svelte hooks:
 
 ```js
 // vite.config.js
+import { sveltekit } from '@sveltejs/kit/vite';
+import { nornsConfig } from '@human-synthesis/norns/config';
+import { nornsPreprocess } from '@human-synthesis/norns/preprocess';
 import { nornsCivetPlugin } from '@human-synthesis/norns/vite';
 import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
 
@@ -90,7 +90,14 @@ export default {
   plugins: [
     nornsCivetPlugin(),
     nornsAutoImport(),
-    sveltekit()
+    sveltekit(
+      nornsConfig({
+        preprocess: [
+          ...nornsPreprocess(),
+          nornsAutoImport({ componentDirs: ['src/lib/components', 'src/routes'] })
+        ]
+      })
+    )
   ]
 };
 ```
@@ -242,7 +249,7 @@ The `norns` binary wraps Vite and adds the checks an agent (or a human) should r
 ```sh
 norns dev | build | preview        # vite, with framework-source watching in workspace mode
 norns lint [--json]                # Civet / Pug pitfall scan over .c / .civet / .n (templates AND script blocks) + vite.config
-norns check [--json] [--warnings]  # preprocess + compile every .n / .c / .civet through your svelte.config.js; file:line:column errors
+norns check [--json] [--warnings]  # preprocess + compile every .n / .c / .civet through your sveltekit() options; file:line:column errors
 norns diag <file>                  # the JS Civet emits for a .c / .civet / .n script block
 norns diag --template <file.n>     # the Svelte source the compiler sees after Pug / Civet / auto-import preprocessing
 norns migrate status | up | create <feature>/<name>

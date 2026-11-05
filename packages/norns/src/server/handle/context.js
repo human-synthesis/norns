@@ -1,7 +1,7 @@
 import { withScope } from '../scope.js';
 
 /** @typedef {import('../container.js').Container} Container */
-/** @typedef {import('@sveltejs/kit').Handle} Handle */
+/** @typedef {import('@sveltejs/kit/hooks').Handle} Handle */
 
 /**
  * Per-request middleware: creates a child scope of the root container and

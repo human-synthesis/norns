@@ -26,25 +26,25 @@ export function createApp(): Container;
  *
  * @param {{
  *   features?: Record<string, FeatureModule>,
- *   extraHandle?: import('@sveltejs/kit').Handle | import('@sveltejs/kit').Handle[],
- *   handleError?: import('@sveltejs/kit').HandleServerError,
+ *   extraHandle?: import('@sveltejs/kit/hooks').Handle | import('@sveltejs/kit/hooks').Handle[],
+ *   handleError?: import('@sveltejs/kit/hooks').HandleServerError,
  *   serializer?: import('./route.js').Serializer | null
  * }} [opts]
  * @returns {Promise<{
  *   container: Container,
- *   handle: import('@sveltejs/kit').Handle,
- *   handleError: import('@sveltejs/kit').HandleServerError
+ *   handle: import('@sveltejs/kit/hooks').Handle,
+ *   handleError: import('@sveltejs/kit/hooks').HandleServerError
  * }>}
  */
 export function boot(opts?: {
     features?: Record<string, FeatureModule>;
-    extraHandle?: import("@sveltejs/kit").Handle | import("@sveltejs/kit").Handle[];
-    handleError?: import("@sveltejs/kit").HandleServerError;
+    extraHandle?: import("@sveltejs/kit/hooks").Handle | import("@sveltejs/kit/hooks").Handle[];
+    handleError?: import("@sveltejs/kit/hooks").HandleServerError;
     serializer?: import("./route.js").Serializer | null;
 }): Promise<{
     container: Container;
-    handle: import("@sveltejs/kit").Handle;
-    handleError: import("@sveltejs/kit").HandleServerError;
+    handle: import("@sveltejs/kit/hooks").Handle;
+    handleError: import("@sveltejs/kit/hooks").HandleServerError;
 }>;
 export type ModuleRegister = (app: Container) => void | Promise<void>;
 export type FeatureModule = {

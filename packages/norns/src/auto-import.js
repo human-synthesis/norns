@@ -597,20 +597,20 @@ function renderImports(entries) {
  * handlers, repo / service modules). Wire it in both places:
  *
  * ```js
- * // svelte.config.js
+ * // vite.config.js (SvelteKit 3 — no svelte.config.js)
+ * import { sveltekit } from '@sveltejs/kit/vite';
  * import { nornsConfig } from '@human-synthesis/norns/config';
  * import { nornsPreprocess } from '@human-synthesis/norns/preprocess';
- * import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
- *
- * export default nornsConfig({
- *   preprocess: [...nornsPreprocess(), nornsAutoImport()]
- * });
- *
- * // vite.config.js
  * import { nornsCivetPlugin } from '@human-synthesis/norns/vite';
  * import { nornsAutoImport } from '@human-synthesis/norns/auto-import';
  *
- * export default { plugins: [nornsCivetPlugin(), nornsAutoImport()] };
+ * export default {
+ *   plugins: [
+ *     nornsCivetPlugin(),
+ *     nornsAutoImport(),
+ *     sveltekit(nornsConfig({ preprocess: [...nornsPreprocess(), nornsAutoImport()] }))
+ *   ]
+ * };
  * ```
  *
  * Detection rules:

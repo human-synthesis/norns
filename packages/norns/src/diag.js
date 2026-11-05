@@ -39,7 +39,7 @@ export async function nornsDiag(file) {
 
 /**
  * Run a `.n` / `.svelte` file through the given Svelte preprocessor chain
- * (normally the project's `svelte.config.js` `preprocess`) and return the
+ * (normally the `preprocess` passed to `sveltekit()` in vite.config.js) and return the
  * resulting Svelte source: Pug rendered to markup, Civet compiled to JS,
  * auto-imports injected. This is exactly what the Svelte compiler sees, so
  * it is the place to look when a compile error quotes markup you never

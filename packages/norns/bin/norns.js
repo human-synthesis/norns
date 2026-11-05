@@ -368,7 +368,7 @@ Commands:
   migrate up                         apply pending migrations
   migrate create <feature>/<name>    scaffold a new SQL migration
   lint [--json]                      scan .c/.civet/.n (templates + script blocks) and vite.config for known pitfalls
-  check [--json] [--warnings]        preprocess + compile every .n/.c/.civet through svelte.config.js; file:line:column errors
+  check [--json] [--warnings]        preprocess + compile every .n/.c/.civet through the sveltekit() options; file:line:column errors
   diag <file>                        print the JS Civet compiles a .c/.civet/.n script to
   diag --template <file.n>           print the Svelte source the compiler sees after Pug/Civet/auto-import preprocessing
 
